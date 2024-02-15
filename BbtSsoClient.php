@@ -62,8 +62,9 @@ class BbtSsoClient {
             throw new Exception('Invalid call, missing "code"');
         }
 
-        if(empty($_SESSION['pkce_verifier'])){
-			header("HTTP/1.1 401 PKCE Verifier is missing");exit;
+        if(empty($_SESSION['pkce_verifier'])){ //might be caused by session timeout/by clearing browser's cache
+            // header("HTTP/1.1 401 PKCE Verifier is missing");exit;
+            $this->LoginPage(['error' => 'You left your login-page too long, please try logging-in again !']);
         }
 
         try{
