@@ -5,10 +5,26 @@
 class BbtSsoClient {
     private $sso_url;
     private $client_id;
+    private $sso_url_local;
+    private $proxy_url;
+    private $proxy_username;
+    private $proxy_password;
+    private $auth_throttle;
 
-    function __construct($sso_url, $client_id){
+    function __construct(
+        $sso_url, $client_id, 
+        $sso_url_local = '',
+        $proxy_url = '',
+        $proxy_username = '', $proxy_password = '',
+        $auth_throttle = 0
+    ){
         $this->sso_url = $sso_url;
         $this->client_id = $client_id;
+        $this->sso_url_local = $sso_url_local;
+        $this->proxy_url = $proxy_url;
+        $this->proxy_username = $proxy_username;
+        $this->proxy_password = $proxy_password;
+        $this->auth_throttle = $auth_throttle;
     }
 
     function LoginPage($params = []){
@@ -51,7 +67,7 @@ class BbtSsoClient {
         }
 
         try{
-            $resp = $this->HttpPost($this->sso_url.'/get_token', [
+            $resp = $this->HttpPost($this->GetBaseUrl().'/get_token', [
                 'code' => $_GET['code'],
                 'verifier' => $_SESSION['pkce_verifier']
             ]);
@@ -83,8 +99,20 @@ class BbtSsoClient {
             $this->LoginPage();
         }
 
+        if($this->auth_throttle > 0){
+            if(!isset($_SESSION['sso']['last_auth'])){
+                $_SESSION['sso']['last_auth'] = time();
+            }
+
+            $now = time();
+            $last_auth = (int)$_SESSION['sso']['last_auth'];
+            if(($now - $last_auth) <= $this->auth_throttle){
+                return;
+            }
+        }
+
         try{
-            $resp = $this->HttpPost($this->sso_url.'/authorize', [
+            $resp = $this->HttpPost($this->GetBaseUrl().'/authorize', [
                 'client_id' => $this->client_id,
                 'access_token' => $this->GetToken('access_token')
             ]);
@@ -93,9 +121,12 @@ class BbtSsoClient {
                 if($json_resp->status != 'ok'){
                     throw new Exception("Authorization Failed: $resp");
                 }
+                if($this->auth_throttle > 0){
+                    $_SESSION['sso']['last_auth'] = time();
+                }
             }
         }catch(Exception $e){
-            if($e->getMessage() == '401 Expired'){ //access token is expired
+            if($this->endsWith($e->getMessage(), ': 401 Expired')){ //access token is expired
                 $this->RefreshToken();
             }else{
                 throw $e;
@@ -105,7 +136,7 @@ class BbtSsoClient {
 
     private function RefreshToken(){
         try{
-            $resp = $this->HttpPost($this->sso_url.'/authorize', [
+            $resp = $this->HttpPost($this->GetBaseUrl().'/authorize', [
                 'client_id' => $this->client_id,
                 'refresh_token' => $this->GetToken('refresh_token')
             ]);
@@ -114,18 +145,25 @@ class BbtSsoClient {
                 if($json_resp->status == 'ok'){
                     // session_regenerate_id();
                     $_SESSION['sso']['access_token'] = $json_resp->access_token;
+                    if($this->auth_throttle > 0){
+                        $_SESSION['sso']['last_auth'] = time();
+                    }
                 }else{
                     throw new Exception("Refresh Authorization Failed: $resp");
                 }
             }
         }catch(Exception $e){
-            if($e->getMessage() == '401 Expired'){ //refresh token is expired
+            if($this->endsWith($e->getMessage(), ': 401 Expired')){ //refresh token is expired
                 session_destroy();
                 $this->LoginPage([
                     'alert' => 'Your session is expired, please login again !'
                 ]);
             }
         }
+    }
+
+    private function GetBaseUrl(){
+        return !empty($this->sso_url_local)? $this->sso_url_local: $this->sso_url;
     }
 
     private function GetToken($name){
@@ -141,6 +179,15 @@ class BbtSsoClient {
         curl_setopt($curl, CURLOPT_POSTFIELDS, $params);
         curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($curl, CURLOPT_FAILONERROR, true);
+        curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 30); 
+        curl_setopt($curl, CURLOPT_TIMEOUT, 120);
+
+        if(!empty($this->proxy_url)){
+            curl_setopt($curl, CURLOPT_PROXY, $this->proxy_url);
+            if(!empty($this->proxy_username)){
+                curl_setopt($curl, CURLOPT_PROXYUSERPWD, "$this->proxy_username:$this->proxy_password");
+            }
+        }
         
         $curlResponse = curl_exec($curl);
         $error_no = '';
@@ -151,11 +198,13 @@ class BbtSsoClient {
         curl_close($curl);
 
         if(!empty($error_no)){
-            $split1 = explode(':', $error_msg);
-            $error_msg2 = trim($split1[1]);
-            throw new Exception($error_msg2);
+            throw new Exception($error_msg);
         }
 
         return $curlResponse;
+    }
+
+    private function endsWith($haystack, $needle) {
+        return substr_compare($haystack, $needle, -strlen($needle)) === 0;
     }
 }
