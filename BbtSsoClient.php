@@ -64,7 +64,7 @@ class BbtSsoClient {
 
         if(empty($_SESSION['pkce_verifier'])){ //might be caused by session timeout/by clearing browser's cache
             // header("HTTP/1.1 401 PKCE Verifier is missing");exit;
-            $this->LoginPage(['error' => 'You left your login-page too long, please try logging-in again !']);
+            $this->LoginPage(['error' => 'You left your login-page open for a long period of time. Please try logging in again !']);
         }
 
         try{
@@ -127,8 +127,12 @@ class BbtSsoClient {
                 }
             }
         }catch(Exception $e){
-            if($this->endsWith($e->getMessage(), ': 401 Expired')){ //access token is expired
-                $this->RefreshToken();
+            if($e->getCode() == 401){
+                if($this->endsWith($e->getMessage(), ': 401 Expired')){ //access token is expired
+                    $this->RefreshToken();
+                }else{ //401 error, the cause is being logged in SSO server
+                    $this->Logout(['alert' => 'Your session is expired(401), please login again !']);
+                }
             }else{
                 throw $e;
             }
@@ -154,13 +158,23 @@ class BbtSsoClient {
                 }
             }
         }catch(Exception $e){
-            if($this->endsWith($e->getMessage(), ': 401 Expired')){ //refresh token is expired
-                session_destroy();
-                $this->LoginPage([
-                    'alert' => 'Your session is expired, please login again !'
-                ]);
+            if($e->getCode() == 401){
+                $alert_msg = 'Your session is expired, please login again !';
+                if($this->endsWith($e->getMessage(), ': 401 Expired')){ //refresh token is expired
+                    $alert_msg = 'Your session is expired, please login again !';
+                }else{ //401 error, the cause is being logged in SSO server
+                    $alert_msg = 'Your session is expired(401), please login again !';
+                }
+                $this->Logout(['alert' => $alert_msg]);
+            }else{
+                throw $e;
             }
         }
+    }
+
+    private function Logout($loginPageParams = []){
+        session_destroy();
+        $this->LoginPage($loginPageParams);
     }
 
     private function GetBaseUrl(){
@@ -180,8 +194,8 @@ class BbtSsoClient {
         curl_setopt($curl, CURLOPT_POSTFIELDS, $params);
         curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($curl, CURLOPT_FAILONERROR, true);
-        curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 30); 
-        curl_setopt($curl, CURLOPT_TIMEOUT, 120);
+        curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 30);
+        curl_setopt($curl, CURLOPT_TIMEOUT, 60);
 
         if(!empty($this->proxy_url)){
             curl_setopt($curl, CURLOPT_PROXY, $this->proxy_url);
@@ -191,6 +205,8 @@ class BbtSsoClient {
         }
         
         $curlResponse = curl_exec($curl);
+        $http_resp_code = curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
+        
         $error_no = '';
         $error_msg = '';
         if(($error_no = curl_errno($curl))) {
@@ -198,8 +214,10 @@ class BbtSsoClient {
         }
         curl_close($curl);
 
-        if(!empty($error_no)){
-            throw new Exception($error_msg);
+        if($http_resp_code >= 400){
+            throw new Exception($error_msg, $http_resp_code);
+        }else if($error_no != 0){
+            throw new Exception($error_msg, $error_no);
         }
 
         return $curlResponse;
