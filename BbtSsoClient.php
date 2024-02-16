@@ -194,8 +194,8 @@ class BbtSsoClient {
         curl_setopt($curl, CURLOPT_POSTFIELDS, $params);
         curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($curl, CURLOPT_FAILONERROR, true);
-        curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 30); 
-        curl_setopt($curl, CURLOPT_TIMEOUT, 120);
+        curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 30);
+        curl_setopt($curl, CURLOPT_TIMEOUT, 60);
 
         if(!empty($this->proxy_url)){
             curl_setopt($curl, CURLOPT_PROXY, $this->proxy_url);
