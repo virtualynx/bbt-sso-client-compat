@@ -64,7 +64,7 @@ class BbtSsoClient {
 
         if(empty($_SESSION['pkce_verifier'])){ //might be caused by session timeout/by clearing browser's cache
             // header("HTTP/1.1 401 PKCE Verifier is missing");exit;
-            $this->LoginPage(['error' => 'You left your login-page too long, please try logging-in again !']);
+            $this->LoginPage(['error' => 'You left your login-page open for a long period of time. Please try logging in again !']);
         }
 
         try{
@@ -129,6 +129,11 @@ class BbtSsoClient {
         }catch(Exception $e){
             if($this->endsWith($e->getMessage(), ': 401 Expired')){ //access token is expired
                 $this->RefreshToken();
+            }else if(strstr($e->getMessage(), 'The requested URL returned error: 401')){ //401 error, the cause is being logged in SSO server
+                session_destroy();
+                $this->LoginPage([
+                    'alert' => 'Your session is expired(code:401), please login again !'
+                ]);
             }else{
                 throw $e;
             }
