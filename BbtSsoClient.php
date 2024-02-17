@@ -64,7 +64,7 @@ class BbtSsoClient {
 
         if(empty($_SESSION['pkce_verifier'])){ //might be caused by session timeout/by clearing browser's cache
             // header("HTTP/1.1 401 PKCE Verifier is missing");exit;
-            $this->LoginPage(['error' => 'You left your login-page open for a long period of time. Please try logging in again !']);
+            $this->LoginPage(['alert' => 'You left your login-page open for a long period of time. Please try logging in again !']);
         }
 
         try{
