@@ -148,7 +148,7 @@ class BbtSsoClient {
             if($resp){
                 $json_resp = json_decode($resp);
                 if($json_resp->status == 'ok'){
-                    // session_regenerate_id();
+                    session_regenerate_id();
                     $_SESSION['sso']['access_token'] = $json_resp->access_token;
                     if($this->auth_throttle > 0){
                         $_SESSION['sso']['last_auth'] = time();
