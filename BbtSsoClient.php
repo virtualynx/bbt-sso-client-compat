@@ -215,7 +215,8 @@ class BbtSsoClient {
         curl_close($curl);
 
         if($http_resp_code >= 400){
-            throw new Exception($error_msg, $http_resp_code);
+            $msg = !empty($curlResponse)? $curlResponse: $error_msg;
+            throw new Exception($msg, $http_resp_code);
         }else if($error_no != 0){
             throw new Exception($error_msg, $error_no);
         }
