@@ -128,7 +128,8 @@ class BbtSsoClient {
             }
         }catch(Exception $e){
             if($e->getCode() == 401){
-                if($this->endsWith($e->getMessage(), ': 401 Expired')){ //access token is expired
+                // if($this->endsWith($e->getMessage(), ': 401 Expired')){ //access token is expired
+                if($e->getMessage() == 'expired'){ //access token is expired
                     $this->RefreshToken();
                 }else{ //401 error, the cause is being logged in SSO server
                     $this->Logout(['alert' => 'Your session is expired(401-access), please login again ! : '.$e->getMessage()]);
