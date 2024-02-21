@@ -128,10 +128,10 @@ class BbtSsoClient {
             }
         }catch(Exception $e){
             if($e->getCode() == 401){
-                if($this->endsWith($e->getMessage(), ': 401 Expired')){ //access token is expired
+                if($e->getMessage() == 'expired'){ //access token is expired
                     $this->RefreshToken();
                 }else{ //401 error, the cause is being logged in SSO server
-                    $this->Logout(['alert' => 'Your session is expired(401), please login again !']);
+                    $this->Logout(['alert' => 'Your session is expired(401-access), please login again ! ('.$e->getMessage().')']);
                 }
             }else{
                 throw $e;
@@ -159,11 +159,11 @@ class BbtSsoClient {
             }
         }catch(Exception $e){
             if($e->getCode() == 401){
-                $alert_msg = 'Your session is expired, please login again !';
-                if($this->endsWith($e->getMessage(), ': 401 Expired')){ //refresh token is expired
+                $alert_msg = '';
+                if($e->getMessage() == 'expired'){ //refresh token is expired
                     $alert_msg = 'Your session is expired, please login again !';
                 }else{ //401 error, the cause is being logged in SSO server
-                    $alert_msg = 'Your session is expired(401), please login again !';
+                    $alert_msg = 'Your session is expired(401-refresh), please login again ! ('.$e->getMessage().')';
                 }
                 $this->Logout(['alert' => $alert_msg]);
             }else{
@@ -193,7 +193,7 @@ class BbtSsoClient {
         $curl = curl_init($url);
         curl_setopt($curl, CURLOPT_POSTFIELDS, $params);
         curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($curl, CURLOPT_FAILONERROR, true);
+        curl_setopt($curl, CURLOPT_FAILONERROR, false);
         curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 30);
         curl_setopt($curl, CURLOPT_TIMEOUT, 60);
 
@@ -215,7 +215,8 @@ class BbtSsoClient {
         curl_close($curl);
 
         if($http_resp_code >= 400){
-            throw new Exception($error_msg, $http_resp_code);
+            $msg = !empty($curlResponse)? $curlResponse: $error_msg;
+            throw new Exception($msg, $http_resp_code);
         }else if($error_no != 0){
             throw new Exception($error_msg, $error_no);
         }
