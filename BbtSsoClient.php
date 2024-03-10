@@ -11,7 +11,7 @@ class BbtSsoClient {
     private $client_secret;
     private $sso_url_local;
     private $proxy;
-    private HttpClient $http_client;
+    private $http_client;
     private $token_keymap = [
         'access_token' => 'mwsat',
         'refresh_token' => 'mwsrt',
