@@ -10,40 +10,34 @@ class BbtSsoClient {
     private $client_id;
     private $client_secret;
     private $sso_url_local;
-    private $proxy_url;
-    private $proxy_username;
-    private $proxy_password;
-    private $auth_throttle;
+    private $proxy;
+    private HttpClient $http_client;
     private $token_keymap = [
         'access_token' => 'mwsat',
-        'refresh_token' => 'mwsrt',
+        'refresh_token' => 'mwsrt'
     ];
     private $token_ages = [
-        'access_token' => (60*3),
-        'refresh_token' => (60*60*12)
+        'access_token' => (60*5),
+        'refresh_token' => (60*60*2)
     ];
 
     function __construct(
         $sso_url, $client_id, $client_secret,
         $sso_url_local = '',
-        $proxy_url = '',
-        $proxy_username = '', $proxy_password = '',
-        $auth_throttle = 0
+        $proxy = null
     ){
         $this->sso_url = $sso_url;
         $this->client_id = $client_id;
         $this->client_secret = $client_secret;
         $this->sso_url_local = $sso_url_local;
-        $this->proxy_url = $proxy_url;
-        $this->proxy_username = $proxy_username;
-        $this->proxy_password = $proxy_password;
-        $this->auth_throttle = $auth_throttle;
+        $this->proxy = $proxy;
+        $this->http_client = new HttpClient($proxy);
     }
 
     function LoginPage($params = []){
         $code_length = 64;
 		$verifier = bin2hex(random_bytes(($code_length-($code_length%2))/2));
-        setcookie('pkce_verifier', $verifier, time() + (60*60*24 * 3), "/", $this->GetSsoDomain(), false, true);
+        setcookie('pkce_verifier', $verifier, time() + (60*60*24 * 3), '/', $this->GetDomain(), false, true);
 
         $challenge = base64_encode(hash('sha256', $verifier));
         
@@ -64,7 +58,11 @@ class BbtSsoClient {
         exit();
     }
 
+    /**
+     * Call this on your callback endpoint
+     */
     function SsoCallbackHandler(){
+        $this->GetDomain();
         if(!isset($_GET['code'])){
             throw new \Exception('Invalid call, missing "code"');
         }
@@ -75,17 +73,21 @@ class BbtSsoClient {
 
         try{
             $pkce_verifier = $_COOKIE['pkce_verifier'];
-            setcookie('pkce_verifier', '', time() - 1, "/", $this->GetSsoDomain(), false, true);
+            setcookie('pkce_verifier', '', time() - 1, '/', $this->GetDomain(), false, true);
 
-            $resp = $this->HttpPost($this->GetBaseUrl().'/get_token', [
+
+
+            $resp = $this->http_client->post($this->GetBaseUrl().'/get_token', [
                 'code' => $_GET['code'],
                 'verifier' => $pkce_verifier
+                // 'token' => 
             ]);
             if($resp){
                 $json_resp = json_decode($resp);
                 
                 $this->SaveToken('access_token', $json_resp->access_token);
                 $this->SaveToken('refresh_token', $json_resp->refresh_token);
+                $this->SaveSharedSession($json_resp->refresh_token);
 
                 return $json_resp->user;
             }
@@ -97,7 +99,7 @@ class BbtSsoClient {
     }
 
     /**
-     * 
+     * Call this to check the validity of the SSO's shared-session
      */
     function Auth(){
         if($this->IsThrottled()){
@@ -106,20 +108,17 @@ class BbtSsoClient {
 
         try{
             $access_token = $this->GetToken('access_token');
-            $resp = $this->HttpPost($this->GetBaseUrl().'/authorize', [
-                'client_id' => $this->client_id,
-                'access_token' => $access_token
-            ]);
+            $resp = $this->http_client->post($this->GetBaseUrl().'/authorize', ['type' => 'access'], $access_token);
             if($resp){
                 $json_resp = json_decode($resp);
-                if($json_resp->status != 'ok'){
+                if($json_resp->status != 'success'){
                     throw new \Exception("Authorization Failed: $resp");
                 }
                 $this->SetNextThrottlingTime();
             }
         }catch(\Exception $e){
             if($e->getCode() == 401){
-                if($e->getMessage() == 'expired'){ //access token is expired
+                if($e->getMessage() == 'Expired token'){ //access token is expired
                     $this->RefreshToken();
                 }else{ //401 error, the cause is being logged in SSO server
                     $this->Logout(['alert' => 'Your session is expired(401-access), please login again ! ('.$e->getMessage().')']);
@@ -130,53 +129,16 @@ class BbtSsoClient {
         }
     }
 
-    function GetUserInfo(){
-        $this->Auth();
-
-        try{
-            $resp = $this->HttpPost($this->GetBaseUrl().'/userinfo', [
-                'client_id' => $this->client_id,
-                'access_token' => $this->GetToken('access_token')
-            ]);
-            if($resp){
-                $json_resp = json_decode($resp);
-                if($json_resp->status != 'success'){
-                    throw new \Exception("Get User Info failed: $resp");
-                }
-                
-                return $json_resp->employee;
-            }
-        }catch(\Exception $e){
-            // if($e->getCode() == 401){
-            //     if($e->getMessage() == 'expired'){ //access token is expired
-            //         $this->RefreshToken();
-            //     }else{ //401 error, the cause is being logged in SSO server
-            //         $this->Logout(['alert' => 'Your session is expired(401-access), please login again ! ('.$e->getMessage().')']);
-            //     }
-            // }else{
-            //     throw $e;
-            // }
-            throw $e;
-        }
-
-        throw new \Exception('userinfo endpoint return no data');
-    }
-
-    function CheckSharedSession(){
-
-    }
-
     private function RefreshToken(){
         try{
             $refresh_token = $this->GetToken('refresh_token');
-            $resp = $this->HttpPost($this->GetBaseUrl().'/authorize', [
-                'client_id' => $this->client_id,
-                'refresh_token' => $refresh_token
-            ]);
+            $resp = $this->http_client->post($this->GetBaseUrl().'/authorize', ['type' => 'refresh'], $refresh_token);
             if($resp){
                 $json_resp = json_decode($resp);
-                if($json_resp->status == 'ok'){
+                if($json_resp->status == 'success'){
                     $this->SaveToken('access_token', $json_resp->access_token);
+                    $this->SaveToken('refresh_token', $json_resp->refresh_token);
+                    $this->SaveSharedSession($json_resp->refresh_token);
                     $this->SetNextThrottlingTime();
                 }else{
                     throw new \Exception("Refresh Authorization Failed: $resp");
@@ -185,7 +147,7 @@ class BbtSsoClient {
         }catch(\Exception $e){
             if($e->getCode() == 401){
                 $alert_msg = '';
-                if($e->getMessage() == 'expired'){ //refresh token is expired
+                if($e->getMessage() == 'Expired token'){ //refresh token is expired
                     $alert_msg = 'Your session is expired, please login again !';
                 }else{ //401 error, the cause is being logged in SSO server
                     $alert_msg = 'Your session is expired(401-refresh), please login again ! ('.$e->getMessage().')';
@@ -197,9 +159,30 @@ class BbtSsoClient {
         }
     }
 
+    function GetUserInfo(){
+        $this->Auth();
+
+        try{
+            $resp = $this->http_client->post(
+                $this->GetBaseUrl().'/userinfo', ['client_id' => $this->client_id], $this->GetToken('access_token'));
+            if($resp){
+                $json_resp = json_decode($resp);
+                if($json_resp->status != 'success'){
+                    throw new \Exception("Get User Info failed: $resp");
+                }
+                
+                return $json_resp->user;
+            }
+        }catch(\Exception $e){
+            throw $e;
+        }
+
+        throw new \Exception('userinfo endpoint return no data');
+    }
+
     public function RevokeTokens(){
-        setcookie($this->token_keymap['access_token'], '', time()-1, "/", $this->GetSsoDomain(), false, true);
-        setcookie($this->token_keymap['refresh_token'], '', time()-1, "/", $this->GetSsoDomain(), false, true);
+        setcookie($this->token_keymap['access_token'], '', time()-1, '/', $this->GetDomain(), false, true);
+        setcookie($this->token_keymap['refresh_token'], '', time()-1, '/', $this->GetDomain(), false, true);
     }
 
     public function Logout($loginPageParams = []){
@@ -225,16 +208,19 @@ class BbtSsoClient {
         }
 
         $tag = $this->token_keymap[$name];
-
         if(empty($_COOKIE[$tag])) {
-            throw new \Exception('expired', 401);
+            throw new \Exception('Expired token', 401);
         }
 
         return $_COOKIE[$tag];
     }
 
     private function SaveToken($name, $token){
-        setcookie($this->token_keymap[$name], $token, time() + $this->token_ages[$name], "/", $this->GetSsoDomain(), false, true);
+        setcookie($this->token_keymap[$name], $token, time() + $this->token_ages[$name], '/', $this->GetDomain(), false, true);
+    }
+
+    private function SaveSharedSession($token){
+        setcookie($this->token_keymap['refresh_token'], $token, time() + $this->token_ages['refresh_token'], '/sso', $this->GetSsoDomain(), false, true);
     }
 
 	private function GetSsoDomain(){
@@ -243,50 +229,35 @@ class BbtSsoClient {
 		return $parse['host'];
 	}
 
-    private function HttpPost($url, $params){
-        $curl = curl_init($url);
-        curl_setopt($curl, CURLOPT_POSTFIELDS, $params);
-        curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($curl, CURLOPT_FAILONERROR, false);
-        curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 30);
-        curl_setopt($curl, CURLOPT_TIMEOUT, 60);
-
-        if(!empty($this->proxy_url)){
-            curl_setopt($curl, CURLOPT_PROXY, $this->proxy_url);
-            if(!empty($this->proxy_username)){
-                curl_setopt($curl, CURLOPT_PROXYUSERPWD, "$this->proxy_username:$this->proxy_password");
-            }
+    function GetDomain(){
+        $url = '';
+        if(isset($_SERVER['HTTP_HOST'])){
+            $url = $_SERVER['HTTP_HOST'];
+        }else if(isset($_SERVER['SERVER_NAME'])){
+            $url = $_SERVER['SERVER_NAME'];
+        }else if(isset($_SERVER['SERVER_ADDR'])){
+            $url = $_SERVER['SERVER_ADDR'];
         }
+
+        $pieces = parse_url($url);
+        $domain = isset($pieces['host'])? $pieces['host']: '';
         
-        $curlResponse = curl_exec($curl);
-        $http_resp_code = curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
-        
-        $error_no = '';
-        $error_msg = '';
-        if(($error_no = curl_errno($curl))) {
-            $error_msg = curl_error($curl);
-        }
-        curl_close($curl);
-
-        if($http_resp_code >= 400){
-            $msg = !empty($curlResponse)? $curlResponse: $error_msg;
-            throw new \Exception($msg, $http_resp_code);
-        }else if($error_no != 0){
-            throw new \Exception($error_msg, $error_no);
+        if(preg_match('/(?P<domain>[a-z0-9][a-z0-9\-]{1,63}\.[a-z\.]{2,6})$/i', $domain, $regs)){
+            return $regs['domain'];
         }
 
-        return $curlResponse;
+        return $pieces['host'];
     }
 
     private function IsThrottled() {
-        if($this->auth_throttle > 0){
+        if(!empty($this->proxy) && $this->proxy->auth_throttle > 0){
             if(!isset($_COOKIE['sso_last_auth'])){
                 $this->SetNextThrottlingTime();
             }
 
             $now = time();
             $last_auth = (int)$_COOKIE['sso_last_auth'];
-            if(($now - $last_auth) <= $this->auth_throttle){
+            if(($now - $last_auth) <= $this->proxy->auth_throttle){
                 return true;
             }
         }
@@ -295,6 +266,8 @@ class BbtSsoClient {
     }
 
     private function SetNextThrottlingTime(){
-        setcookie('sso_last_auth', time(), time() + ($this->auth_throttle * 2), "/", $this->GetSsoDomain(), false, true);
+        if(!empty($this->proxy) && $this->proxy->auth_throttle > 0){
+            setcookie('sso_last_auth', time(), time() + ($this->proxy->auth_throttle * 2), '/', $this->GetDomain(), false, true);
+        }
     }
 }
