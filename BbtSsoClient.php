@@ -184,7 +184,6 @@ class BbtSsoClient {
     public function RevokeTokens(){
         setcookie($this->token_keymap['access_token'], '', time()-1, '/', $this->GetDomain(), false, true);
         setcookie($this->token_keymap['refresh_token'], '', time()-1, '/', $this->GetDomain(), false, true);
-        setcookie($this->token_keymap['refresh_token'], '', time()-1, '/', $this->GetDomain(), false, true);
     }
 
     public function Logout($loginPageParams = []){
