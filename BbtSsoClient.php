@@ -243,18 +243,18 @@ class BbtSsoClient {
             $url = $_SERVER['HTTP_HOST'];
         }else if(isset($_SERVER['SERVER_NAME'])){
             $url = $_SERVER['SERVER_NAME'];
-        }else if(isset($_SERVER['SERVER_ADDR'])){
+        }/*else if(isset($_SERVER['SERVER_ADDR'])){
             $url = $_SERVER['SERVER_ADDR'];
-        }
+        }*/
 
         $pieces = parse_url($url);
-        $domain = isset($pieces['host'])? $pieces['host']: '';
+        $domain = isset($pieces['host'])? $pieces['host']: (isset($pieces['path'])? $pieces['path']: '');
         
         if(preg_match('/(?P<domain>[a-z0-9][a-z0-9\-]{1,63}\.[a-z\.]{2,6})$/i', $domain, $regs)){
             return '.'.$regs['domain'];
         }
 
-        return $pieces['host'];
+        return $domain;
     }
 
     private function IsThrottled() {
