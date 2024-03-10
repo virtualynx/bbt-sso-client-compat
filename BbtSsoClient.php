@@ -46,15 +46,15 @@ class BbtSsoClient {
         $params['challenge'] = $challenge;
         $params['challenge_method'] = 's256';
 
-        $login_url = $this->sso_url;
-        if(count($params) > 0){
-            $strs = [];
-            foreach($params as $key => $value){
-                $encoded_value = urlencode($value);
-                $strs []= "$key=$encoded_value";
-            }
-            $login_url .= '?'.(implode('&', $strs));
+		$shared_sess_id = bin2hex(random_bytes(($code_length-($code_length%2))/2));
+        $params['shared_sess_id'] = $shared_sess_id;
+        
+        $strs = [];
+        foreach($params as $key => $value){
+            $encoded_value = urlencode($value);
+            $strs []= "$key=$encoded_value";
         }
+        $login_url = "$this->sso_url?".(implode('&', $strs));
         header("Location: $login_url");
         exit();
     }
@@ -76,8 +76,6 @@ class BbtSsoClient {
             $pkce_verifier = $_COOKIE['pkce_verifier'];
             setcookie('pkce_verifier', '', time() - 1, '/', $this->GetDomain(), false, true);
 
-
-
             $resp = $this->http_client->post($this->GetBaseUrl().'/get_token', [
                 'code' => $_GET['code'],
                 'verifier' => $pkce_verifier
@@ -97,6 +95,20 @@ class BbtSsoClient {
         }
 
         return null;
+    }
+
+    /**
+     * Call this on shared-session endpoint(if using shared-session across all application)
+     */
+    function SetSharedSessionHandler(){
+        
+    }
+
+    /**
+     * Login using shared-session(if exists)
+     */
+    function LoginUsingSharedSession(){
+
     }
 
     /**
@@ -183,7 +195,6 @@ class BbtSsoClient {
 
     public function RevokeTokens(){
         setcookie($this->token_keymap['access_token'], '', time()-1, '/', $this->GetDomain(), false, true);
-        setcookie($this->token_keymap['refresh_token'], '', time()-1, '/', $this->GetDomain(), false, true);
         setcookie($this->token_keymap['refresh_token'], '', time()-1, '/', $this->GetDomain(), false, true);
     }
 
