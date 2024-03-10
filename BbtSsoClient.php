@@ -46,6 +46,7 @@ class BbtSsoClient {
         $params['challenge'] = $challenge;
         $params['challenge_method'] = 's256';
 
+        $code_length = 32;
 		$shared_sess_id = bin2hex(random_bytes(($code_length-($code_length%2))/2));
         $params['shared_sess_id'] = $shared_sess_id;
         
@@ -86,7 +87,6 @@ class BbtSsoClient {
                 
                 $this->SaveToken('access_token', $json_resp->access_token);
                 $this->SaveToken('refresh_token', $json_resp->refresh_token);
-                $this->SaveSharedSession($json_resp->refresh_token);
 
                 return $json_resp->user;
             }
@@ -151,7 +151,6 @@ class BbtSsoClient {
                 if($json_resp->status == 'success'){
                     $this->SaveToken('access_token', $json_resp->access_token);
                     $this->SaveToken('refresh_token', $json_resp->refresh_token);
-                    $this->SaveSharedSession($json_resp->refresh_token);
                     $this->SetNextThrottlingTime();
                 }else{
                     throw new \Exception("Refresh Authorization Failed: $resp");
@@ -230,10 +229,6 @@ class BbtSsoClient {
 
     private function SaveToken($name, $token){
         setcookie($this->token_keymap[$name], $token, time() + $this->token_ages[$name], '/', $this->GetDomain(), false, true);
-    }
-
-    private function SaveSharedSession($token){
-        setcookie($this->token_keymap['session_token'], $token, time() + $this->token_ages['refresh_token'], '/', $this->GetSsoDomain(), false, true);
     }
 
 	private function GetSsoDomain(){
