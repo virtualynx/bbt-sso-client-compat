@@ -14,8 +14,7 @@ class BbtSsoClient {
     private $http_client;
     private $token_keymap = [
         'access_token' => 'mwsat',
-        'refresh_token' => 'mwsrt',
-        'session_token' => 'mwsst'
+        'refresh_token' => 'mwsrt'
     ];
     private $token_ages = [
         'access_token' => (60*5),
@@ -100,8 +99,12 @@ class BbtSsoClient {
     /**
      * Call this on shared-session endpoint(if using shared-session across all application)
      */
-    function SetSharedSessionHandler(){
-        
+    function SharedSessionHandler(){
+        if(!empty($_POST['apps_id']) && !empty($_POST['shared_sess_id'])){
+            setcookie('mwssess_'.$_POST['apps_id'], $_POST['shared_sess_id'], time() + (60*60*24), '/', $this->GetDomain(), false, true);
+        }else{
+
+        }
     }
 
     /**
