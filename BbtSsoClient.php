@@ -191,7 +191,9 @@ class BbtSsoClient {
                 $this->LoginPage($loginPageParams);
             }
         }catch(\Exception $e){
-            throw $e;
+            if($e->getCode()!=401){
+                throw $e;
+            }
         }
     }
 
