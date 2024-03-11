@@ -1,230 +1,295 @@
 <?php
+
+namespace Bbt\Sso;
+
 /**
  * For PHP >= 5.4.0
  */
 class BbtSsoClient {
     private $sso_url;
     private $client_id;
+    private $client_secret;
     private $sso_url_local;
-    private $proxy_url;
-    private $proxy_username;
-    private $proxy_password;
-    private $auth_throttle;
+    private $proxy;
+    private $http_client;
+
+    private const ACCESS_TOKEN_NAME = 'mwsat';
+    private const REFRESH_TOKEN_NAME = 'mwsrt';
+    private const ACCESS_TOKEN_AGE = (60*5);
+    private const REFRESH_TOKEN_AGE = (60*60*2);
 
     function __construct(
-        $sso_url, $client_id, 
+        $sso_url, $client_id, $client_secret,
         $sso_url_local = '',
-        $proxy_url = '',
-        $proxy_username = '', $proxy_password = '',
-        $auth_throttle = 0
+        $proxy = null
     ){
         $this->sso_url = $sso_url;
         $this->client_id = $client_id;
+        $this->client_secret = $client_secret;
         $this->sso_url_local = $sso_url_local;
-        $this->proxy_url = $proxy_url;
-        $this->proxy_username = $proxy_username;
-        $this->proxy_password = $proxy_password;
-        $this->auth_throttle = $auth_throttle;
+        $this->proxy = $proxy;
+        $this->http_client = new HttpClient($proxy);
     }
 
-    function LoginPage($params = []){
-        if(session_status() === PHP_SESSION_NONE) {
-            session_start();
-        }else{
-            session_regenerate_id();
-        }
-
-		$code_length = 64;
+    function LoginPage($params = [], $redirectLoginPage = true){
+        $code_length = 64;
 		$verifier = bin2hex(random_bytes(($code_length-($code_length%2))/2));
-        $_SESSION['pkce_verifier'] = $verifier;
+        setcookie('pkce_verifier', $verifier, time() + (60*60*24 * 3), '/', $this->GetDomain(), false, true);
 
         $challenge = base64_encode(hash('sha256', $verifier));
         
         $params['client_id'] = $this->client_id;
         $params['challenge'] = $challenge;
         $params['challenge_method'] = 's256';
-
-        $login_url = $this->sso_url;
-        if(count($params) > 0){
-            $strs = [];
-            foreach($params as $key => $value){
-                $encoded_value = urlencode($value);
-                $strs []= "$key=$encoded_value";
-            }
-            $login_url .= '?'.(implode('&', $strs));
+        
+        $strs = [];
+        foreach($params as $key => $value){
+            $encoded_value = urlencode($value);
+            $strs []= "$key=$encoded_value";
         }
-        header("Location: $login_url");
-        exit();
+        $login_url = "$this->sso_url?".(implode('&', $strs));
+
+        if($redirectLoginPage){
+            header("Location: $login_url");
+            exit();
+        }
+
+        return $login_url;
     }
 
+    /**
+     * Call this on your callback endpoint
+     */
     function SsoCallbackHandler(){
         if(!isset($_GET['code'])){
-            throw new Exception('Invalid call, missing "code"');
+            throw new \Exception('Invalid call, missing "code"');
         }
 
-        if(empty($_SESSION['pkce_verifier'])){ //might be caused by session timeout/by clearing browser's cache
-            // header("HTTP/1.1 401 PKCE Verifier is missing");exit;
+        if(!isset($_COOKIE['pkce_verifier'])){
             $this->LoginPage(['alert' => 'You left your login-page open for a long period of time. Please try logging in again !']);
         }
 
         try{
-            $resp = $this->HttpPost($this->GetBaseUrl().'/get_token', [
+            $pkce_verifier = $_COOKIE['pkce_verifier'];
+            setcookie('pkce_verifier', '', time() - 1, '/', $this->GetDomain(), false, true);
+
+            $resp = $this->http_client->post($this->GetSsoUrl().'/get_token', [
                 'code' => $_GET['code'],
-                'verifier' => $_SESSION['pkce_verifier']
+                'verifier' => $pkce_verifier
             ]);
             if($resp){
                 $json_resp = json_decode($resp);
-                
-                session_regenerate_id();
+                self::SaveTokens($json_resp);
 
-                if(!isset($_SESSION['sso'])){
-                    $_SESSION['sso'] = [];
-                }
-                $_SESSION['sso']['access_token'] = $json_resp->access_token;
-                $_SESSION['sso']['refresh_token'] = $json_resp->refresh_token;
-
-                return $json_resp->employee;
+                return $json_resp->user;
             }
-        }catch(Exception $e){
+
+            throw new \Exception('Empty response from Code-Exchange API');
+        }catch(\Exception $e){
+            if($e->getCode() == 401 && $e->getMessage() == 'PKCE challenge failed'){
+                $this->LoginPage(['alert' => 'Login failed, make sure not to open multiple SSO-Login Page at once']);
+            }
+
             throw $e;
         }
-
-        return null;
     }
 
     /**
-     * 
+     * Call this to check the validity of the SSO's shared-session
      */
-    function Auth(){
-        if(session_status() === PHP_SESSION_NONE) {
-            $this->LoginPage();
-        }
-
-        if($this->auth_throttle > 0){
-            if(!isset($_SESSION['sso']['last_auth'])){
-                $_SESSION['sso']['last_auth'] = time();
-            }
-
-            $now = time();
-            $last_auth = (int)$_SESSION['sso']['last_auth'];
-            if(($now - $last_auth) <= $this->auth_throttle){
-                return;
-            }
+    function Auth($autoRedirectLogin = true){
+        if($this->IsThrottled()){
+            return true;
         }
 
         try{
-            $resp = $this->HttpPost($this->GetBaseUrl().'/authorize', [
-                'client_id' => $this->client_id,
-                'access_token' => $this->GetToken('access_token')
-            ]);
+            $access_token = self::GetToken('access_token');
+            $resp = $this->http_client->post($this->GetSsoUrl().'/authorize', ['type' => 'access'], $access_token);
             if($resp){
                 $json_resp = json_decode($resp);
-                if($json_resp->status != 'ok'){
-                    throw new Exception("Authorization Failed: $resp");
+                if($json_resp->status != 'success'){
+                    throw new \Exception("Authorization Failed: $resp");
                 }
-                if($this->auth_throttle > 0){
-                    $_SESSION['sso']['last_auth'] = time();
-                }
+                $this->SetNextThrottlingTime();
+
+                return true;
             }
-        }catch(Exception $e){
+
+            throw new \Exception('Empty response from Authentication API');
+        }catch(\Exception $e){
             if($e->getCode() == 401){
-                if($e->getMessage() == 'expired'){ //access token is expired
-                    $this->RefreshToken();
+                if($e->getMessage() == 'Expired token'){ //access token is expired
+                    return $this->RefreshToken($autoRedirectLogin);
                 }else{ //401 error, the cause is being logged in SSO server
-                    $this->Logout(['alert' => 'Your session is expired(401-access), please login again ! ('.$e->getMessage().')']);
+                    if($autoRedirectLogin){
+                        $this->Logout(['alert' => 'Your session is expired(401-access), please login again ! ('.$e->getMessage().')']);
+                    }
+
+                    return false;
                 }
-            }else{
-                throw $e;
             }
+
+            throw $e;
         }
     }
-
-    private function RefreshToken(){
+    
+    private function RefreshToken($autoRedirectLogin){
         try{
-            $resp = $this->HttpPost($this->GetBaseUrl().'/authorize', [
-                'client_id' => $this->client_id,
-                'refresh_token' => $this->GetToken('refresh_token')
-            ]);
+            $refresh_token = self::GetToken('refresh_token');
+            $resp = $this->http_client->post($this->GetSsoUrl().'/authorize', ['type' => 'refresh'], $refresh_token);
             if($resp){
                 $json_resp = json_decode($resp);
-                if($json_resp->status == 'ok'){
-                    session_regenerate_id();
-                    $_SESSION['sso']['access_token'] = $json_resp->access_token;
-                    if($this->auth_throttle > 0){
-                        $_SESSION['sso']['last_auth'] = time();
-                    }
+                if($json_resp->status == 'success'){
+                    self::SaveTokens($json_resp);
+                    $this->SetNextThrottlingTime();
+
+                    return true;
                 }else{
-                    throw new Exception("Refresh Authorization Failed: $resp");
+                    throw new \Exception("Refresh Authorization Failed: $resp");
                 }
             }
-        }catch(Exception $e){
+
+            throw new \Exception('Empty response from Authentication API');
+        }catch(\Exception $e){
             if($e->getCode() == 401){
                 $alert_msg = '';
-                if($e->getMessage() == 'expired'){ //refresh token is expired
+                if($e->getMessage() == 'Expired token'){ //refresh token is expired
                     $alert_msg = 'Your session is expired, please login again !';
                 }else{ //401 error, the cause is being logged in SSO server
                     $alert_msg = 'Your session is expired(401-refresh), please login again ! ('.$e->getMessage().')';
                 }
-                $this->Logout(['alert' => $alert_msg]);
-            }else{
+                if($autoRedirectLogin){
+                    $this->Logout(['alert' => $alert_msg]);
+                }
+
+                return false;
+            }
+            
+            throw $e;
+        }
+    }
+
+    function GetUserInfo(){
+        $this->Auth();
+
+        try{
+            $resp = $this->http_client->post(
+                $this->GetSsoUrl().'/userinfo', ['client_id' => $this->client_id], self::GetToken('access_token'));
+            if($resp){
+                $json_resp = json_decode($resp);
+                if($json_resp->status != 'success'){
+                    throw new \Exception("Get User Info failed: $resp");
+                }
+                
+                return $json_resp->user;
+            }
+
+            throw new \Exception('Empty response from User-info API');
+        }catch(\Exception $e){
+            throw $e;
+        }
+    }
+
+    public function Logout($loginPageParams = []){
+        // session_destroy();
+
+        try{
+            $access_token = self::GetToken('access_token');
+            $resp = $this->http_client->post($this->GetSsoUrl().'/logout', [], $access_token);
+            if($resp){
+                $json_resp = json_decode($resp);
+                if($json_resp->status != 'success'){
+                    throw new \Exception("SLO failed: $resp");
+                }
+
+                self::RevokeTokens();
+            }
+
+            throw new \Exception('Empty response from Logout API');
+        }catch(\Exception $e){
+            if($e->getCode() != 401){
                 throw $e;
             }
         }
-    }
 
-    private function Logout($loginPageParams = []){
-        session_destroy();
         $this->LoginPage($loginPageParams);
     }
 
-    private function GetBaseUrl(){
+    private function GetSsoUrl(){
         return !empty($this->sso_url_local)? $this->sso_url_local: $this->sso_url;
     }
 
-    private function GetToken($name){
-        if(session_status() === PHP_SESSION_NONE || empty($_SESSION['sso']) || empty($_SESSION['sso'][$name])){
-            $this->LoginPage();
-        }
+    private static function GetToken($name){
+        $token_keymap = [
+            'access_token' => self::ACCESS_TOKEN_NAME,
+            'refresh_token' => self::REFRESH_TOKEN_NAME
+        ];
         
-        return $_SESSION['sso'][$name];
+        if(empty($_COOKIE[$token_keymap['access_token']]) && empty($_COOKIE[$token_keymap['refresh_token']])) {
+            throw new \Exception('Expired token', 401);
+        }
+
+        $tag = $token_keymap[$name];
+        if(empty($_COOKIE[$tag])) {
+            throw new \Exception('Expired token', 401);
+        }
+
+        return $_COOKIE[$tag];
     }
 
-    private function HttpPost($url, $params){
-        $curl = curl_init($url);
-        curl_setopt($curl, CURLOPT_POSTFIELDS, $params);
-        curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($curl, CURLOPT_FAILONERROR, false);
-        curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 30);
-        curl_setopt($curl, CURLOPT_TIMEOUT, 60);
+    private static function SaveTokens($tokens){
+        $domain = self::GetDomain();
+        setcookie(self::ACCESS_TOKEN_NAME, $tokens->access_token, time() + self::ACCESS_TOKEN_AGE, '/', $domain, false, true);
+        setcookie(self::REFRESH_TOKEN_NAME, $tokens->refresh_token, time() + self::REFRESH_TOKEN_AGE, '/', $domain, false, true);
+    }
 
-        if(!empty($this->proxy_url)){
-            curl_setopt($curl, CURLOPT_PROXY, $this->proxy_url);
-            if(!empty($this->proxy_username)){
-                curl_setopt($curl, CURLOPT_PROXYUSERPWD, "$this->proxy_username:$this->proxy_password");
+    private static function RevokeTokens(){
+        $domain = self::GetDomain();
+        setcookie(self::ACCESS_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
+        setcookie(self::REFRESH_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
+    }
+
+    private static function GetDomain(){
+        $url = '';
+        if(isset($_SERVER['HTTP_HOST'])){
+            $url = $_SERVER['HTTP_HOST'];
+        }else if(isset($_SERVER['SERVER_NAME'])){
+            $url = $_SERVER['SERVER_NAME'];
+        }else if(isset($_SERVER['SERVER_ADDR'])){
+            $url = $_SERVER['SERVER_ADDR'];
+        }
+
+        $url = in_array($url, ['0.0.0.0', '::1'])? 'localhost': $url;
+
+        $pieces = parse_url($url);
+        $domain = isset($pieces['host'])? $pieces['host']: (isset($pieces['path'])? $pieces['path']: '');
+        
+        if(preg_match('/(?P<domain>[a-z0-9][a-z0-9\-]{1,63}\.[a-z\.]{2,6})$/i', $domain, $regs)){
+            return '.'.$regs['domain'];
+        }
+
+        return $domain;
+    }
+
+    private function IsThrottled() {
+        if(!empty($this->proxy) && $this->proxy->auth_throttle > 0){
+            if(!isset($_COOKIE['sso_last_auth'])){
+                $this->SetNextThrottlingTime();
+            }
+
+            $now = time();
+            $last_auth = (int)$_COOKIE['sso_last_auth'];
+            if(($now - $last_auth) <= $this->proxy->auth_throttle){
+                return true;
             }
         }
-        
-        $curlResponse = curl_exec($curl);
-        $http_resp_code = curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
-        
-        $error_no = '';
-        $error_msg = '';
-        if(($error_no = curl_errno($curl))) {
-            $error_msg = curl_error($curl);
-        }
-        curl_close($curl);
 
-        if($http_resp_code >= 400){
-            $msg = !empty($curlResponse)? $curlResponse: $error_msg;
-            throw new Exception($msg, $http_resp_code);
-        }else if($error_no != 0){
-            throw new Exception($error_msg, $error_no);
-        }
-
-        return $curlResponse;
+        return false;
     }
 
-    private function endsWith($haystack, $needle) {
-        return substr_compare($haystack, $needle, -strlen($needle)) === 0;
+    private function SetNextThrottlingTime(){
+        if(!empty($this->proxy) && $this->proxy->auth_throttle > 0){
+            setcookie('sso_last_auth', time(), time() + ($this->proxy->auth_throttle * 2), '/', $this->GetDomain(), false, true);
+        }
     }
 }
