@@ -31,7 +31,7 @@ class BbtSsoClient {
         $this->http_client = new HttpClient($proxy);
     }
 
-    function LoginPage($params = []){
+    function LoginPage($params = [], $redirectLoginPage = true){
         $code_length = 64;
 		$verifier = bin2hex(random_bytes(($code_length-($code_length%2))/2));
         setcookie('pkce_verifier', $verifier, time() + (60*60*24 * 3), '/', $this->GetDomain(), false, true);
@@ -41,10 +41,6 @@ class BbtSsoClient {
         $params['client_id'] = $this->client_id;
         $params['challenge'] = $challenge;
         $params['challenge_method'] = 's256';
-
-        $code_length = 32;
-		$shared_sess_id = bin2hex(random_bytes(($code_length-($code_length%2))/2));
-        $params['shared_sess_id'] = $shared_sess_id;
         
         $strs = [];
         foreach($params as $key => $value){
@@ -52,8 +48,13 @@ class BbtSsoClient {
             $strs []= "$key=$encoded_value";
         }
         $login_url = "$this->sso_url?".(implode('&', $strs));
-        header("Location: $login_url");
-        exit();
+
+        if($redirectLoginPage){
+            header("Location: $login_url");
+            exit();
+        }
+
+        return $login_url;
     }
 
     /**
@@ -82,23 +83,27 @@ class BbtSsoClient {
 
                 return $json_resp->user;
             }
+
+            throw new \Exception('Empty response from Code-Exchange API');
         }catch(\Exception $e){
+            if($e->getCode() == 401 && $e->getMessage() == 'PKCE challenge failed'){
+                $this->LoginPage(['alert' => 'Login failed, make sure not to open multiple SSO-Login Page at once']);
+            }
+
             throw $e;
         }
-
-        return null;
     }
 
     /**
      * Call this to check the validity of the SSO's shared-session
      */
-    function Auth(){
+    function Auth($autoRedirectLogin = true){
         if($this->IsThrottled()){
-            return;
+            return true;
         }
 
         try{
-            $access_token = $this->GetToken('access_token');
+            $access_token = self::GetToken('access_token');
             $resp = $this->http_client->post($this->GetSsoUrl().'/authorize', ['type' => 'access'], $access_token);
             if($resp){
                 $json_resp = json_decode($resp);
@@ -106,33 +111,45 @@ class BbtSsoClient {
                     throw new \Exception("Authorization Failed: $resp");
                 }
                 $this->SetNextThrottlingTime();
+
+                return true;
             }
+
+            throw new \Exception('Empty response from Authentication API');
         }catch(\Exception $e){
             if($e->getCode() == 401){
                 if($e->getMessage() == 'Expired token'){ //access token is expired
-                    $this->RefreshToken();
+                    return $this->RefreshToken($autoRedirectLogin);
                 }else{ //401 error, the cause is being logged in SSO server
-                    $this->Logout(['alert' => 'Your session is expired(401-access), please login again ! ('.$e->getMessage().')']);
+                    if($autoRedirectLogin){
+                        $this->Logout(['alert' => 'Your session is expired(401-access), please login again ! ('.$e->getMessage().')']);
+                    }
+
+                    return false;
                 }
-            }else{
-                throw $e;
             }
+
+            throw $e;
         }
     }
     
-    private function RefreshToken(){
+    private function RefreshToken($autoRedirectLogin){
         try{
-            $refresh_token = $this->GetToken('refresh_token');
+            $refresh_token = self::GetToken('refresh_token');
             $resp = $this->http_client->post($this->GetSsoUrl().'/authorize', ['type' => 'refresh'], $refresh_token);
             if($resp){
                 $json_resp = json_decode($resp);
                 if($json_resp->status == 'success'){
                     self::SaveTokens($json_resp);
                     $this->SetNextThrottlingTime();
+
+                    return true;
                 }else{
                     throw new \Exception("Refresh Authorization Failed: $resp");
                 }
             }
+
+            throw new \Exception('Empty response from Authentication API');
         }catch(\Exception $e){
             if($e->getCode() == 401){
                 $alert_msg = '';
@@ -141,10 +158,14 @@ class BbtSsoClient {
                 }else{ //401 error, the cause is being logged in SSO server
                     $alert_msg = 'Your session is expired(401-refresh), please login again ! ('.$e->getMessage().')';
                 }
-                $this->Logout(['alert' => $alert_msg]);
-            }else{
-                throw $e;
+                if($autoRedirectLogin){
+                    $this->Logout(['alert' => $alert_msg]);
+                }
+
+                return false;
             }
+            
+            throw $e;
         }
     }
 
@@ -153,7 +174,7 @@ class BbtSsoClient {
 
         try{
             $resp = $this->http_client->post(
-                $this->GetSsoUrl().'/userinfo', ['client_id' => $this->client_id], $this->GetToken('access_token'));
+                $this->GetSsoUrl().'/userinfo', ['client_id' => $this->client_id], self::GetToken('access_token'));
             if($resp){
                 $json_resp = json_decode($resp);
                 if($json_resp->status != 'success'){
@@ -162,53 +183,50 @@ class BbtSsoClient {
                 
                 return $json_resp->user;
             }
+
+            throw new \Exception('Empty response from User-info API');
         }catch(\Exception $e){
             throw $e;
         }
-
-        throw new \Exception('userinfo endpoint return no data');
-    }
-
-    public function RevokeTokens(){
-        $domain = self::GetDomain();
-        setcookie(self::ACCESS_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
-        setcookie(self::REFRESH_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
     }
 
     public function Logout($loginPageParams = []){
         // session_destroy();
 
         try{
-            $resp = $this->http_client->post(
-                $this->GetSsoUrl().'/logout', [], $this->GetToken('access_token'));
+            $access_token = self::GetToken('access_token');
+            $resp = $this->http_client->post($this->GetSsoUrl().'/logout', [], $access_token);
             if($resp){
                 $json_resp = json_decode($resp);
                 if($json_resp->status != 'success'){
                     throw new \Exception("SLO failed: $resp");
                 }
 
-                $this->RevokeTokens();
-                $this->LoginPage($loginPageParams);
+                self::RevokeTokens();
             }
+
+            throw new \Exception('Empty response from Logout API');
         }catch(\Exception $e){
-            if($e->getCode()!=401){
+            if($e->getCode() != 401){
                 throw $e;
             }
         }
+
+        $this->LoginPage($loginPageParams);
     }
 
     private function GetSsoUrl(){
         return !empty($this->sso_url_local)? $this->sso_url_local: $this->sso_url;
     }
 
-    private function GetToken($name){
+    private static function GetToken($name){
         $token_keymap = [
             'access_token' => self::ACCESS_TOKEN_NAME,
             'refresh_token' => self::REFRESH_TOKEN_NAME
         ];
         
         if(empty($_COOKIE[$token_keymap['access_token']]) && empty($_COOKIE[$token_keymap['refresh_token']])) {
-            $this->LoginPage();
+            throw new \Exception('Expired token', 401);
         }
 
         $tag = $token_keymap[$name];
@@ -223,6 +241,12 @@ class BbtSsoClient {
         $domain = self::GetDomain();
         setcookie(self::ACCESS_TOKEN_NAME, $tokens->access_token, time() + self::ACCESS_TOKEN_AGE, '/', $domain, false, true);
         setcookie(self::REFRESH_TOKEN_NAME, $tokens->refresh_token, time() + self::REFRESH_TOKEN_AGE, '/', $domain, false, true);
+    }
+
+    private static function RevokeTokens(){
+        $domain = self::GetDomain();
+        setcookie(self::ACCESS_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
+        setcookie(self::REFRESH_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
     }
 
     private static function GetDomain(){
