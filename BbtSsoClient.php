@@ -203,9 +203,9 @@ class BbtSsoClient {
                 }
 
                 self::RevokeTokens();
+            }else{
+                throw new \Exception('Empty response from Logout API');
             }
-
-            throw new \Exception('Empty response from Logout API');
         }catch(\Exception $e){
             if($e->getCode() != 401){
                 throw $e;
