@@ -12,14 +12,11 @@ class BbtSsoClient {
     private $sso_url_local;
     private $proxy;
     private $http_client;
-    private $token_keymap = [
-        'access_token' => 'mwsat',
-        'refresh_token' => 'mwsrt'
-    ];
-    private $token_ages = [
-        'access_token' => (60*5),
-        'refresh_token' => (60*60*2)
-    ];
+
+    private const ACCESS_TOKEN_NAME = 'mwsat';
+    private const REFRESH_TOKEN_NAME = 'mwsrt';
+    private const ACCESS_TOKEN_AGE = (60*5);
+    private const REFRESH_TOKEN_AGE = (60*60*2);
 
     function __construct(
         $sso_url, $client_id, $client_secret,
@@ -63,7 +60,6 @@ class BbtSsoClient {
      * Call this on your callback endpoint
      */
     function SsoCallbackHandler(){
-        $this->GetDomain();
         if(!isset($_GET['code'])){
             throw new \Exception('Invalid call, missing "code"');
         }
@@ -76,16 +72,13 @@ class BbtSsoClient {
             $pkce_verifier = $_COOKIE['pkce_verifier'];
             setcookie('pkce_verifier', '', time() - 1, '/', $this->GetDomain(), false, true);
 
-            $resp = $this->http_client->post($this->GetBaseUrl().'/get_token', [
+            $resp = $this->http_client->post($this->GetSsoUrl().'/get_token', [
                 'code' => $_GET['code'],
                 'verifier' => $pkce_verifier
-                // 'token' => 
             ]);
             if($resp){
                 $json_resp = json_decode($resp);
-                
-                $this->SaveToken('access_token', $json_resp->access_token);
-                $this->SaveToken('refresh_token', $json_resp->refresh_token);
+                self::SaveTokens($json_resp);
 
                 return $json_resp->user;
             }
@@ -94,24 +87,6 @@ class BbtSsoClient {
         }
 
         return null;
-    }
-
-    /**
-     * Call this on shared-session endpoint(if using shared-session across all application)
-     */
-    function SharedSessionHandler(){
-        if(!empty($_POST['apps_id']) && !empty($_POST['shared_sess_id'])){
-            setcookie('mwssess_'.$_POST['apps_id'], $_POST['shared_sess_id'], time() + (60*60*24), '/', $this->GetDomain(), false, true);
-        }else{
-
-        }
-    }
-
-    /**
-     * Login using shared-session(if exists)
-     */
-    function LoginUsingSharedSession(){
-
     }
 
     /**
@@ -124,7 +99,7 @@ class BbtSsoClient {
 
         try{
             $access_token = $this->GetToken('access_token');
-            $resp = $this->http_client->post($this->GetBaseUrl().'/authorize', ['type' => 'access'], $access_token);
+            $resp = $this->http_client->post($this->GetSsoUrl().'/authorize', ['type' => 'access'], $access_token);
             if($resp){
                 $json_resp = json_decode($resp);
                 if($json_resp->status != 'success'){
@@ -144,16 +119,15 @@ class BbtSsoClient {
             }
         }
     }
-
+    
     private function RefreshToken(){
         try{
             $refresh_token = $this->GetToken('refresh_token');
-            $resp = $this->http_client->post($this->GetBaseUrl().'/authorize', ['type' => 'refresh'], $refresh_token);
+            $resp = $this->http_client->post($this->GetSsoUrl().'/authorize', ['type' => 'refresh'], $refresh_token);
             if($resp){
                 $json_resp = json_decode($resp);
                 if($json_resp->status == 'success'){
-                    $this->SaveToken('access_token', $json_resp->access_token);
-                    $this->SaveToken('refresh_token', $json_resp->refresh_token);
+                    self::SaveTokens($json_resp);
                     $this->SetNextThrottlingTime();
                 }else{
                     throw new \Exception("Refresh Authorization Failed: $resp");
@@ -179,7 +153,7 @@ class BbtSsoClient {
 
         try{
             $resp = $this->http_client->post(
-                $this->GetBaseUrl().'/userinfo', ['client_id' => $this->client_id], $this->GetToken('access_token'));
+                $this->GetSsoUrl().'/userinfo', ['client_id' => $this->client_id], $this->GetToken('access_token'));
             if($resp){
                 $json_resp = json_decode($resp);
                 if($json_resp->status != 'success'){
@@ -196,33 +170,46 @@ class BbtSsoClient {
     }
 
     public function RevokeTokens(){
-        setcookie($this->token_keymap['access_token'], '', time()-1, '/', $this->GetDomain(), false, true);
-        setcookie($this->token_keymap['refresh_token'], '', time()-1, '/', $this->GetDomain(), false, true);
+        $domain = self::GetDomain();
+        setcookie(self::ACCESS_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
+        setcookie(self::REFRESH_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
     }
 
     public function Logout($loginPageParams = []){
         // session_destroy();
-        $this->RevokeTokens();
-                
-        $this->LoginPage($loginPageParams);
+
+        try{
+            $resp = $this->http_client->post(
+                $this->GetSsoUrl().'/logout', [], $this->GetToken('access_token'));
+            if($resp){
+                $json_resp = json_decode($resp);
+                if($json_resp->status != 'success'){
+                    throw new \Exception("SLO failed: $resp");
+                }
+
+                $this->RevokeTokens();
+                $this->LoginPage($loginPageParams);
+            }
+        }catch(\Exception $e){
+            throw $e;
+        }
     }
 
-    private function GetBaseUrl(){
+    private function GetSsoUrl(){
         return !empty($this->sso_url_local)? $this->sso_url_local: $this->sso_url;
     }
 
     private function GetToken($name){
-        // if(session_status() === PHP_SESSION_NONE || empty($_SESSION['sso']) || empty($_SESSION['sso'][$name])){
-        //     $this->LoginPage();
-        // }
+        $token_keymap = [
+            'access_token' => self::ACCESS_TOKEN_NAME,
+            'refresh_token' => self::REFRESH_TOKEN_NAME
+        ];
         
-        // return $_SESSION['sso'][$name];
-        
-        if(empty($_COOKIE[$this->token_keymap['access_token']]) && empty($_COOKIE[$this->token_keymap['refresh_token']])) {
+        if(empty($_COOKIE[$token_keymap['access_token']]) && empty($_COOKIE[$token_keymap['refresh_token']])) {
             $this->LoginPage();
         }
 
-        $tag = $this->token_keymap[$name];
+        $tag = $token_keymap[$name];
         if(empty($_COOKIE[$tag])) {
             throw new \Exception('Expired token', 401);
         }
@@ -230,25 +217,23 @@ class BbtSsoClient {
         return $_COOKIE[$tag];
     }
 
-    private function SaveToken($name, $token){
-        setcookie($this->token_keymap[$name], $token, time() + $this->token_ages[$name], '/', $this->GetDomain(), false, true);
+    private static function SaveTokens($tokens){
+        $domain = self::GetDomain();
+        setcookie(self::ACCESS_TOKEN_NAME, $tokens->access_token, time() + self::ACCESS_TOKEN_AGE, '/', $domain, false, true);
+        setcookie(self::REFRESH_TOKEN_NAME, $tokens->refresh_token, time() + self::REFRESH_TOKEN_AGE, '/', $domain, false, true);
     }
 
-	private function GetSsoDomain(){
-		$parse = parse_url($this->sso_url);
-
-		return $parse['host'];
-	}
-
-    function GetDomain(){
+    private static function GetDomain(){
         $url = '';
         if(isset($_SERVER['HTTP_HOST'])){
             $url = $_SERVER['HTTP_HOST'];
         }else if(isset($_SERVER['SERVER_NAME'])){
             $url = $_SERVER['SERVER_NAME'];
-        }/*else if(isset($_SERVER['SERVER_ADDR'])){
+        }else if(isset($_SERVER['SERVER_ADDR'])){
             $url = $_SERVER['SERVER_ADDR'];
-        }*/
+        }
+
+        $url = in_array($url, ['0.0.0.0', '::1'])? 'localhost': $url;
 
         $pieces = parse_url($url);
         $domain = isset($pieces['host'])? $pieces['host']: (isset($pieces['path'])? $pieces['path']: '');
