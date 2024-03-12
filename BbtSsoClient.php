@@ -122,7 +122,7 @@ class BbtSsoClient {
                     return $this->RefreshToken($autoRedirectLogin);
                 }else{ //401 error, the cause is being logged in SSO server
                     if($autoRedirectLogin){
-                        $this->Logout(['alert' => 'Your session is expired(401-access), please login again ! ('.$e->getMessage().')']);
+                        $this->Logout();
                     }
 
                     return false;
@@ -155,8 +155,6 @@ class BbtSsoClient {
                 $alert_msg = '';
                 if($e->getMessage() == 'Expired token'){ //refresh token is expired
                     $alert_msg = 'Your session is expired, please login again !';
-                }else{ //401 error, the cause is being logged in SSO server
-                    $alert_msg = 'Your session is expired(401-refresh), please login again ! ('.$e->getMessage().')';
                 }
                 if($autoRedirectLogin){
                     $this->Logout(['alert' => $alert_msg]);
