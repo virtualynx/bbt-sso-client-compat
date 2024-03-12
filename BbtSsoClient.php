@@ -32,12 +32,9 @@ class BbtSsoClient {
     }
 
     function LoginPage($params = [], $redirectLoginPage = true){
-        $verifier = !empty($_COOKIE['pkce_verifier'])? $_COOKIE['pkce_verifier']: null;
-        if(empty($verifier)){
-            $code_length = 64;
-            $verifier = bin2hex(random_bytes(($code_length-($code_length%2))/2));
-            setcookie('pkce_verifier', $verifier, time() + (60*60*24 * 3), $this->GetSsoDomainPath(), $this->GetSsoDomain(), false, true);
-        }
+        $code_length = 64;
+        $verifier = bin2hex(random_bytes(($code_length-($code_length%2))/2));
+        setcookie('pkce_verifier', $verifier, time() + (60*60*24 * 3), '/', $this->GetDomain(), false, true);
 
         $challenge = base64_encode(hash('sha256', $verifier));
         
@@ -228,12 +225,12 @@ class BbtSsoClient {
         ];
         
         if(empty($_COOKIE[$token_keymap['access_token']]) && empty($_COOKIE[$token_keymap['refresh_token']])) {
-            throw new \Exception('Expired token', 401);
+            throw new \Exception('Missing access and refresh token', 401);
         }
 
         $tag = $token_keymap[$name];
         if(empty($_COOKIE[$tag])) {
-            throw new \Exception('Expired token', 401);
+            throw new \Exception("Missing $name", 401);
         }
 
         return $_COOKIE[$tag];
@@ -251,15 +248,6 @@ class BbtSsoClient {
         setcookie(self::REFRESH_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
     }
 
-    private function GetSsoDomain(){
-        return self::ParseDomainUrl($this->sso_url);
-    }
-
-    private function GetSsoDomainPath(){
-        $pieces = parse_url($this->sso_url);
-        return !empty($pieces['path'])? $pieces['path']: '/';
-    }
-
     private static function GetDomain(){
         $url = '';
         if(isset($_SERVER['HTTP_HOST'])){
@@ -272,10 +260,6 @@ class BbtSsoClient {
 
         $url = in_array($url, ['127.0.0.1', '0.0.0.0', '::1'])? 'localhost': $url;
 
-        return self::ParseDomainUrl($url);
-    }
-
-    private static function ParseDomainUrl($url){
         $pieces = parse_url($url);
         $domain = isset($pieces['host'])? $pieces['host']: (isset($pieces['path'])? $pieces['path']: '');
         
