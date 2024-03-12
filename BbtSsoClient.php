@@ -17,6 +17,12 @@ class BbtSsoClient {
     private const REFRESH_TOKEN_NAME = 'mwsrt';
     private const ACCESS_TOKEN_AGE = (60*5);
     private const REFRESH_TOKEN_AGE = (60*60*2);
+    private const SILENT_LOGOUT_REASONS = [
+        'Missing access and refresh token',
+        'Missing access_token',
+        'Missing refresh_token',
+        'Expired session'
+    ];
 
     function __construct(
         $sso_url, $client_id, $client_secret,
@@ -104,7 +110,7 @@ class BbtSsoClient {
 
         try{
             $access_token = self::GetToken('access_token');
-            $resp = $this->http_client->post($this->GetSsoUrl().'/authorize', ['type' => 'access'], $access_token);
+            $resp = $this->http_client->post($this->GetSsoUrl().'/auth', ['type' => 'access'], $access_token);
             if($resp){
                 $json_resp = json_decode($resp);
                 if($json_resp->status != 'success'){
@@ -120,7 +126,7 @@ class BbtSsoClient {
             if($e->getCode() == 401){
                 if($e->getMessage() == 'Expired token'){ //access token is expired
                     return $this->RefreshToken($autoRedirectLogin);
-                }else{ //401 error, the cause is being logged in SSO server
+                }else if(in_array($e->getMessage(), self::SILENT_LOGOUT_REASONS)){
                     if($autoRedirectLogin){
                         $this->Logout();
                     }
