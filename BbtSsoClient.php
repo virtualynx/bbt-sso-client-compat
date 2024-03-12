@@ -32,9 +32,12 @@ class BbtSsoClient {
     }
 
     function LoginPage($params = [], $redirectLoginPage = true){
-        $code_length = 64;
-		$verifier = bin2hex(random_bytes(($code_length-($code_length%2))/2));
-        setcookie('pkce_verifier', $verifier, time() + (60*60*24 * 3), '/', $this->GetDomain(), false, true);
+        $verifier = !empty($_COOKIE['pkce_verifier'])? $_COOKIE['pkce_verifier']: null;
+        if(empty($verifier)){
+            $code_length = 64;
+            $verifier = bin2hex(random_bytes(($code_length-($code_length%2))/2));
+            setcookie('pkce_verifier', $verifier, time() + (60*60*24 * 3), '/', self::GetDomain(), false, true);
+        }
 
         $challenge = base64_encode(hash('sha256', $verifier));
         
@@ -71,7 +74,7 @@ class BbtSsoClient {
 
         try{
             $pkce_verifier = $_COOKIE['pkce_verifier'];
-            setcookie('pkce_verifier', '', time() - 1, '/', $this->GetDomain(), false, true);
+            setcookie('pkce_verifier', '', time() - 1, '/', self::GetDomain(), false, true);
 
             $resp = $this->http_client->post($this->GetSsoUrl().'/get_token', [
                 'code' => $_GET['code'],
@@ -201,7 +204,6 @@ class BbtSsoClient {
                 if($json_resp->status != 'success'){
                     throw new \Exception("SLO failed: $resp");
                 }
-
                 self::RevokeTokens();
             }else{
                 throw new \Exception('Empty response from Logout API');
@@ -259,7 +261,7 @@ class BbtSsoClient {
             $url = $_SERVER['SERVER_ADDR'];
         }
 
-        $url = in_array($url, ['0.0.0.0', '::1'])? 'localhost': $url;
+        $url = in_array($url, ['127.0.0.1', '0.0.0.0', '::1'])? 'localhost': $url;
 
         $pieces = parse_url($url);
         $domain = isset($pieces['host'])? $pieces['host']: (isset($pieces['path'])? $pieces['path']: '');
@@ -289,7 +291,7 @@ class BbtSsoClient {
 
     private function SetNextThrottlingTime(){
         if(!empty($this->proxy) && $this->proxy->auth_throttle > 0){
-            setcookie('sso_last_auth', time(), time() + ($this->proxy->auth_throttle * 2), '/', $this->GetDomain(), false, true);
+            setcookie('sso_last_auth', time(), time() + ($this->proxy->auth_throttle * 2), '/', self::GetDomain(), false, true);
         }
     }
 }
