@@ -38,8 +38,7 @@ class BbtSsoClient {
     }
 
     function LoginPage($params = [], $redirectLoginPage = true){
-        $code_length = 64;
-        $verifier = bin2hex(random_bytes(($code_length-($code_length%2))/2));
+        $verifier = self::GenerateRandomString(64);
         setcookie('pkce_verifier', $verifier, time() + (60*60*24 * 3), '/', $this->GetDomain(), false, true);
 
         $challenge = base64_encode(hash('sha256', $verifier));
@@ -273,6 +272,10 @@ class BbtSsoClient {
 
         return $domain;
     }
+    
+	private static function GenerateRandomString($length){
+		return bin2hex(random_bytes(($length-($length%2))/2));
+	}
 
     private function IsThrottled() {
         if(!empty($this->proxy) && $this->proxy->auth_throttle > 0){
