@@ -114,7 +114,7 @@ class BbtSsoClient {
             if($resp){
                 $json_resp = json_decode($resp);
                 if($json_resp->status != 'success'){
-                    throw new \Exception("Authorization Failed: $resp");
+                    throw new \Exception("Auth check failed: $resp");
                 }
                 $this->SetNextThrottlingTime();
 
@@ -142,7 +142,7 @@ class BbtSsoClient {
     private function RefreshToken($autoRedirectLogin){
         try{
             $refresh_token = self::GetToken('refresh_token');
-            $resp = $this->http_client->post($this->GetSsoUrl().'/authorize', ['type' => 'refresh'], $refresh_token);
+            $resp = $this->http_client->post($this->GetSsoUrl().'/auth', ['type' => 'refresh'], $refresh_token);
             if($resp){
                 $json_resp = json_decode($resp);
                 if($json_resp->status == 'success'){
@@ -151,7 +151,7 @@ class BbtSsoClient {
 
                     return true;
                 }else{
-                    throw new \Exception("Refresh Authorization Failed: $resp");
+                    throw new \Exception("Auth check failed: $resp");
                 }
             }
 
@@ -194,7 +194,7 @@ class BbtSsoClient {
         }
     }
 
-    public function Logout($loginPageParams = []){
+    public function Logout($loginPageParams = [], $redirectLoginPage = true){
         // session_destroy();
 
         try{
@@ -215,7 +215,7 @@ class BbtSsoClient {
             }
         }
 
-        $this->LoginPage($loginPageParams);
+        return $this->LoginPage($loginPageParams, $redirectLoginPage);
     }
 
     private function GetSsoUrl(){
