@@ -2,6 +2,11 @@
 
 namespace Bbt\Sso;
 
+require_once "Encrypter.php";
+require_once "HttpClient.php";
+require_once "JWT.php";
+require_once "Proxy.php";
+
 /**
  * For PHP >= 5.4.0
  */
@@ -193,18 +198,22 @@ class BbtSsoClient {
         }
     }
 
-    public function Logout($loginPageParams = [], $redirectLoginPage = true){
-        // session_destroy();
+    public function RevokeTokens(){
+        $domain = self::GetDomain();
+        setcookie(self::ACCESS_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
+        setcookie(self::REFRESH_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
+    }
 
+    public function Logout($redirectLoginPage = true){
         try{
             $access_token = self::GetToken('access_token');
+            $this->RevokeTokens();
             $resp = $this->http_client->post($this->GetSsoUrl().'/logout', [], $access_token);
             if($resp){
                 $json_resp = json_decode($resp);
                 if($json_resp->status != 'success'){
                     throw new \Exception("SLO failed: $resp");
                 }
-                self::RevokeTokens();
             }else{
                 throw new \Exception('Empty response from Logout API');
             }
@@ -214,7 +223,7 @@ class BbtSsoClient {
             }
         }
 
-        return $this->LoginPage($loginPageParams, $redirectLoginPage);
+        return $this->LoginPage(['alert' => 'You have been logged-out'], $redirectLoginPage);
     }
 
     private function GetSsoUrl(){
@@ -243,12 +252,6 @@ class BbtSsoClient {
         $domain = self::GetDomain();
         setcookie(self::ACCESS_TOKEN_NAME, $tokens->access_token, time() + self::ACCESS_TOKEN_AGE, '/', $domain, false, true);
         setcookie(self::REFRESH_TOKEN_NAME, $tokens->refresh_token, time() + self::REFRESH_TOKEN_AGE, '/', $domain, false, true);
-    }
-
-    private static function RevokeTokens(){
-        $domain = self::GetDomain();
-        setcookie(self::ACCESS_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
-        setcookie(self::REFRESH_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
     }
 
     private static function GetDomain(){
