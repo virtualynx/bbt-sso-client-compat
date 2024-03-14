@@ -2,6 +2,11 @@
 
 namespace Bbt\Sso;
 
+require_once "Encrypter.php";
+require_once "HttpClient.php";
+require_once "JWT.php";
+require_once "Proxy.php";
+
 /**
  * For PHP >= 5.4.0
  */
@@ -23,6 +28,7 @@ class BbtSsoClient {
         'Missing refresh_token',
         'Expired session'
     ];
+    private const MSG_SESSION_EXPIRED = 'Your session is expired, please login again !';
 
     function __construct(
         $sso_url, $client_id, $client_secret,
@@ -126,8 +132,9 @@ class BbtSsoClient {
                 if($e->getMessage() == 'Expired token'){ //access token is expired
                     return $this->RefreshToken($autoRedirectLogin);
                 }else if(in_array($e->getMessage(), self::SILENT_LOGOUT_REASONS)){
+                    $this->RevokeTokens();
                     if($autoRedirectLogin){
-                        $this->Logout();
+                        $this->LoginPage(['alert' => self::MSG_SESSION_EXPIRED]);
                     }
 
                     return false;
@@ -158,11 +165,12 @@ class BbtSsoClient {
         }catch(\Exception $e){
             if($e->getCode() == 401){
                 $alert_msg = '';
-                if($e->getMessage() == 'Expired token'){ //refresh token is expired
-                    $alert_msg = 'Your session is expired, please login again !';
+                if(in_array($e->getMessage(), ['Expired token', 'Expired session'])){ //refresh token is expired
+                    $alert_msg = self::MSG_SESSION_EXPIRED;
                 }
+                $this->RevokeTokens();
                 if($autoRedirectLogin){
-                    $this->Logout(['alert' => $alert_msg]);
+                    $this->LoginPage(['alert' => $alert_msg]);
                 }
 
                 return false;
@@ -193,18 +201,22 @@ class BbtSsoClient {
         }
     }
 
-    public function Logout($loginPageParams = [], $redirectLoginPage = true){
-        // session_destroy();
+    public function RevokeTokens(){
+        $domain = self::GetDomain();
+        setcookie(self::ACCESS_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
+        setcookie(self::REFRESH_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
+    }
 
+    public function Logout($redirectLoginPage = true){
         try{
             $access_token = self::GetToken('access_token');
+            $this->RevokeTokens();
             $resp = $this->http_client->post($this->GetSsoUrl().'/logout', [], $access_token);
             if($resp){
                 $json_resp = json_decode($resp);
                 if($json_resp->status != 'success'){
                     throw new \Exception("SLO failed: $resp");
                 }
-                self::RevokeTokens();
             }else{
                 throw new \Exception('Empty response from Logout API');
             }
@@ -214,7 +226,7 @@ class BbtSsoClient {
             }
         }
 
-        return $this->LoginPage($loginPageParams, $redirectLoginPage);
+        return $this->LoginPage(['alert' => 'You have been logged-out'], $redirectLoginPage);
     }
 
     private function GetSsoUrl(){
@@ -243,12 +255,6 @@ class BbtSsoClient {
         $domain = self::GetDomain();
         setcookie(self::ACCESS_TOKEN_NAME, $tokens->access_token, time() + self::ACCESS_TOKEN_AGE, '/', $domain, false, true);
         setcookie(self::REFRESH_TOKEN_NAME, $tokens->refresh_token, time() + self::REFRESH_TOKEN_AGE, '/', $domain, false, true);
-    }
-
-    private static function RevokeTokens(){
-        $domain = self::GetDomain();
-        setcookie(self::ACCESS_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
-        setcookie(self::REFRESH_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
     }
 
     private static function GetDomain(){
