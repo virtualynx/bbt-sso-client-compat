@@ -2,6 +2,11 @@
 
 namespace Bbt\Sso;
 
+require_once "Encrypter.php";
+require_once "HttpClient.php";
+require_once "JWT.php";
+require_once "Proxy.php";
+
 /**
  * For PHP >= 5.4.0
  */
@@ -17,6 +22,13 @@ class BbtSsoClient {
     private const REFRESH_TOKEN_NAME = 'mwsrt';
     private const ACCESS_TOKEN_AGE = (60*5);
     private const REFRESH_TOKEN_AGE = (60*60*2);
+    private const SILENT_LOGOUT_REASONS = [
+        'Missing access and refresh token',
+        'Missing access_token',
+        'Missing refresh_token',
+        'Expired session'
+    ];
+    private const MSG_SESSION_EXPIRED = 'Your session is expired, please login again !';
 
     function __construct(
         $sso_url, $client_id, $client_secret,
@@ -32,8 +44,7 @@ class BbtSsoClient {
     }
 
     function LoginPage($params = [], $redirectLoginPage = true){
-        $code_length = 64;
-        $verifier = bin2hex(random_bytes(($code_length-($code_length%2))/2));
+        $verifier = self::GenerateRandomString(64);
         setcookie('pkce_verifier', $verifier, time() + (60*60*24 * 3), '/', $this->GetDomain(), false, true);
 
         $challenge = base64_encode(hash('sha256', $verifier));
@@ -104,11 +115,11 @@ class BbtSsoClient {
 
         try{
             $access_token = self::GetToken('access_token');
-            $resp = $this->http_client->post($this->GetSsoUrl().'/authorize', ['type' => 'access'], $access_token);
+            $resp = $this->http_client->post($this->GetSsoUrl().'/auth', ['type' => 'access'], $access_token);
             if($resp){
                 $json_resp = json_decode($resp);
                 if($json_resp->status != 'success'){
-                    throw new \Exception("Authorization Failed: $resp");
+                    throw new \Exception("Auth check failed: $resp");
                 }
                 $this->SetNextThrottlingTime();
 
@@ -120,12 +131,22 @@ class BbtSsoClient {
             if($e->getCode() == 401){
                 if($e->getMessage() == 'Expired token'){ //access token is expired
                     return $this->RefreshToken($autoRedirectLogin);
-                }else{ //401 error, the cause is being logged in SSO server
+                }else{
+                    $this->RevokeTokens();
+                    $alert = '';
+                    $result = null;
+                    if(in_array($e->getMessage(), self::SILENT_LOGOUT_REASONS)){
+                        $alert = self::MSG_SESSION_EXPIRED;
+                        $result = false;
+                    }else{
+                        $alert = $e->getMessage();
+                        $result = $e->getMessage();
+                    }
                     if($autoRedirectLogin){
-                        $this->Logout();
+                        $this->LoginPage(['alert' => $alert]);
                     }
 
-                    return false;
+                    return $result;
                 }
             }
 
@@ -136,7 +157,7 @@ class BbtSsoClient {
     private function RefreshToken($autoRedirectLogin){
         try{
             $refresh_token = self::GetToken('refresh_token');
-            $resp = $this->http_client->post($this->GetSsoUrl().'/authorize', ['type' => 'refresh'], $refresh_token);
+            $resp = $this->http_client->post($this->GetSsoUrl().'/auth', ['type' => 'refresh'], $refresh_token);
             if($resp){
                 $json_resp = json_decode($resp);
                 if($json_resp->status == 'success'){
@@ -145,7 +166,7 @@ class BbtSsoClient {
 
                     return true;
                 }else{
-                    throw new \Exception("Refresh Authorization Failed: $resp");
+                    throw new \Exception("Auth check failed: $resp");
                 }
             }
 
@@ -153,11 +174,12 @@ class BbtSsoClient {
         }catch(\Exception $e){
             if($e->getCode() == 401){
                 $alert_msg = '';
-                if($e->getMessage() == 'Expired token'){ //refresh token is expired
-                    $alert_msg = 'Your session is expired, please login again !';
+                if(in_array($e->getMessage(), ['Expired token', 'Expired session'])){ //refresh token is expired
+                    $alert_msg = self::MSG_SESSION_EXPIRED;
                 }
+                $this->RevokeTokens();
                 if($autoRedirectLogin){
-                    $this->Logout(['alert' => $alert_msg]);
+                    $this->LoginPage(['alert' => $alert_msg]);
                 }
 
                 return false;
@@ -188,18 +210,22 @@ class BbtSsoClient {
         }
     }
 
-    public function Logout($loginPageParams = []){
-        // session_destroy();
+    public function RevokeTokens(){
+        $domain = self::GetDomain();
+        setcookie(self::ACCESS_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
+        setcookie(self::REFRESH_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
+    }
 
+    public function Logout($redirectLoginPage = true){
         try{
             $access_token = self::GetToken('access_token');
+            $this->RevokeTokens();
             $resp = $this->http_client->post($this->GetSsoUrl().'/logout', [], $access_token);
             if($resp){
                 $json_resp = json_decode($resp);
                 if($json_resp->status != 'success'){
                     throw new \Exception("SLO failed: $resp");
                 }
-                self::RevokeTokens();
             }else{
                 throw new \Exception('Empty response from Logout API');
             }
@@ -209,7 +235,7 @@ class BbtSsoClient {
             }
         }
 
-        $this->LoginPage($loginPageParams);
+        return $this->LoginPage(['alert' => 'You have been logged-out'], $redirectLoginPage);
     }
 
     private function GetSsoUrl(){
@@ -240,12 +266,6 @@ class BbtSsoClient {
         setcookie(self::REFRESH_TOKEN_NAME, $tokens->refresh_token, time() + self::REFRESH_TOKEN_AGE, '/', $domain, false, true);
     }
 
-    private static function RevokeTokens(){
-        $domain = self::GetDomain();
-        setcookie(self::ACCESS_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
-        setcookie(self::REFRESH_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
-    }
-
     private static function GetDomain(){
         $url = '';
         if(isset($_SERVER['HTTP_HOST'])){
@@ -267,6 +287,10 @@ class BbtSsoClient {
 
         return $domain;
     }
+    
+	private static function GenerateRandomString($length){
+		return bin2hex(random_bytes(($length-($length%2))/2));
+	}
 
     private function IsThrottled() {
         if(!empty($this->proxy) && $this->proxy->auth_throttle > 0){
