@@ -131,13 +131,22 @@ class BbtSsoClient {
             if($e->getCode() == 401){
                 if($e->getMessage() == 'Expired token'){ //access token is expired
                     return $this->RefreshToken($autoRedirectLogin);
-                }else if(in_array($e->getMessage(), self::SILENT_LOGOUT_REASONS)){
+                }else{
                     $this->RevokeTokens();
+                    $alert = '';
+                    $result = null;
+                    if(in_array($e->getMessage(), self::SILENT_LOGOUT_REASONS)){
+                        $alert = self::MSG_SESSION_EXPIRED;
+                        $result = false;
+                    }else{
+                        $alert = $e->getMessage();
+                        $result = $e->getMessage();
+                    }
                     if($autoRedirectLogin){
-                        $this->LoginPage(['alert' => self::MSG_SESSION_EXPIRED]);
+                        $this->LoginPage(['alert' => $alert]);
                     }
 
-                    return false;
+                    return $result;
                 }
             }
 
