@@ -28,6 +28,7 @@ class BbtSsoClient {
         'Missing refresh_token',
         'Expired session'
     ];
+    private const MSG_SESSION_EXPIRED = 'Your session is expired, please login again !';
 
     function __construct(
         $sso_url, $client_id, $client_secret,
@@ -131,8 +132,9 @@ class BbtSsoClient {
                 if($e->getMessage() == 'Expired token'){ //access token is expired
                     return $this->RefreshToken($autoRedirectLogin);
                 }else if(in_array($e->getMessage(), self::SILENT_LOGOUT_REASONS)){
+                    $this->RevokeTokens();
                     if($autoRedirectLogin){
-                        $this->Logout();
+                        $this->LoginPage(['alert' => self::MSG_SESSION_EXPIRED]);
                     }
 
                     return false;
@@ -163,11 +165,12 @@ class BbtSsoClient {
         }catch(\Exception $e){
             if($e->getCode() == 401){
                 $alert_msg = '';
-                if($e->getMessage() == 'Expired token'){ //refresh token is expired
-                    $alert_msg = 'Your session is expired, please login again !';
+                if(in_array($e->getMessage(), ['Expired token', 'Expired session'])){ //refresh token is expired
+                    $alert_msg = self::MSG_SESSION_EXPIRED;
                 }
+                $this->RevokeTokens();
                 if($autoRedirectLogin){
-                    $this->Logout(['alert' => $alert_msg]);
+                    $this->LoginPage(['alert' => $alert_msg]);
                 }
 
                 return false;
