@@ -143,7 +143,11 @@ class BbtSsoClient {
                         $result = $e->getMessage();
                     }
                     if($autoRedirectLogin){
-                        $this->LoginPage(['alert' => $alert]);
+                        $loginParams = ['alert' => $alert];
+                        if(!empty($_SERVER['HTTP_REFERER'])){
+                            $loginParams['redirect'] = $_SERVER['HTTP_REFERER'];
+                        }
+                        $this->LoginPage($loginParams);
                     }
 
                     return $result;
@@ -179,7 +183,11 @@ class BbtSsoClient {
                 }
                 $this->RevokeTokens();
                 if($autoRedirectLogin){
-                    $this->LoginPage(['alert' => $alert_msg]);
+                    $loginParams = ['alert' => $alert_msg];
+                    if(!empty($_SERVER['HTTP_REFERER'])){
+                        $loginParams['redirect'] = $_SERVER['HTTP_REFERER'];
+                    }
+                    $this->LoginPage($loginParams);
                 }
 
                 return false;
