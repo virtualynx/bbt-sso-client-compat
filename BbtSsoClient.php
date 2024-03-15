@@ -248,12 +248,15 @@ class BbtSsoClient {
             'refresh_token' => self::REFRESH_TOKEN_NAME
         ];
         
-        if(empty($_COOKIE[$token_keymap['access_token']]) && empty($_COOKIE[$token_keymap['refresh_token']])) {
+        if(empty($_COOKIE[self::ACCESS_TOKEN_NAME]) && empty($_COOKIE[self::REFRESH_TOKEN_NAME])) {
             throw new \Exception('Missing access and refresh token', 401);
         }
 
         $tag = $token_keymap[$name];
         if(empty($_COOKIE[$tag])) {
+            if($name == 'access_token' && !empty($_COOKIE[self::REFRESH_TOKEN_NAME])){
+                throw new \Exception('Expired token', 401);
+            }
             throw new \Exception("Missing $name", 401);
         }
 
