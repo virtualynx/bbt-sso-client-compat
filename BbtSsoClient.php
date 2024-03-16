@@ -83,22 +83,25 @@ class BbtSsoClient {
             $pkce_verifier = $_COOKIE['pkce_verifier'];
             setcookie('pkce_verifier', '', time() - 1, '/', self::GetDomain(), false, true);
 
-            $resp = $this->http_client->post($this->GetSsoUrl().'/token', [
-                'grant_type' => 'authorization_code',
-                'code' => $_GET['code'],
-                'verifier' => $pkce_verifier
-            ]);
+            $resp = $this->http_client->post(
+                $this->GetSsoUrl().'/token', 
+                [
+                    'grant_type' => 'authorization_code',
+                    'code' => $_GET['code'],
+                    'verifier' => $pkce_verifier
+                ]
+            );
             if($resp){
-                $json_resp = json_decode($resp);
-                if($json_resp->status != 'success'){
-                    throw new \Exception($json_resp->status, 500);
+                $json = json_decode($resp);
+                if($json->status != 'success'){
+                    throw new \Exception($json->status, 500);
                 }
-                self::SaveTokens($json_resp->token_data);
+                self::SaveTokens($json->token_data);
 
-                return $json_resp->user;
+                return $json->user;
             }
 
-            throw new \Exception('Empty response from Code-Exchange API');
+            throw new \Exception('Empty response from Code-Exchange API', 500);
         }catch(\Exception $e){
             if($e->getCode() == 401 && $e->getMessage() == 'PKCE challenge failed'){
                 $this->LoginPage(['alert' => 'Login failed, make sure not to open multiple SSO-Login Page at once']);
@@ -111,17 +114,21 @@ class BbtSsoClient {
     /**
      * Call this to check the validity of the tokens and SSO's shared-session
      */
-    function Auth($autoRedirectLogin = true){
+    function AuthCheck($autoRedirectLogin = true){
         if($this->IsThrottled()){
             return true;
         }
 
         try{
             $access_token = self::GetToken('access_token');
-            $resp = $this->http_client->post($this->GetSsoUrl().'/token', ['grant_type' => 'verify'], ["Authorization: Bearer $access_token"]);
+            $resp = $this->http_client->post(
+                $this->GetSsoUrl().'/token', 
+                ['grant_type' => 'verify'], 
+                ["Authorization: Bearer $access_token"]
+            );
             if($resp){
-                $json_resp = json_decode($resp);
-                if($json_resp->status != 'success'){
+                $json = json_decode($resp);
+                if($json->status != 'success'){
                     throw new \Exception("Auth check failed: $resp");
                 }
                 $this->SetNextThrottlingTime();
@@ -129,7 +136,7 @@ class BbtSsoClient {
                 return true;
             }
 
-            throw new \Exception('Empty response from Authentication API');
+            throw new \Exception('Empty response from Authentication API', 500);
         }catch(\Exception $e){
             if($e->getCode() == 401){
                 if($e->getMessage() == 'Expired token'){ //access token is expired
@@ -164,11 +171,15 @@ class BbtSsoClient {
     private function RefreshToken($autoRedirectLogin){
         try{
             $refresh_token = self::GetToken('refresh_token');
-            $resp = $this->http_client->post($this->GetSsoUrl().'/token', ['grant_type' => 'refresh'], ["Authorization: Bearer $refresh_token"]);
+            $resp = $this->http_client->post(
+                $this->GetSsoUrl().'/token', 
+                ['grant_type' => 'refresh'], 
+                ["Authorization: Bearer $refresh_token"]
+            );
             if($resp){
-                $json_resp = json_decode($resp);
-                if($json_resp->status == 'success'){
-                    self::SaveTokens($json_resp->data);
+                $json = json_decode($resp);
+                if($json->status == 'success'){
+                    self::SaveTokens($json->data);
                     $this->SetNextThrottlingTime();
 
                     return true;
@@ -177,7 +188,7 @@ class BbtSsoClient {
                 }
             }
 
-            throw new \Exception('Empty response from Authentication API');
+            throw new \Exception('Empty response from Authentication API', 500);
         }catch(\Exception $e){
             if($e->getCode() == 401){
                 $alert_msg = '';
@@ -200,22 +211,52 @@ class BbtSsoClient {
         }
     }
 
+    /**
+     * Option for authenticating your api-app
+     */
+    function AuthGrantClientCredentials(){
+        try{
+            $credential = base64_encode($this->client_id.':'.$this->client_secret);
+            $resp = $this->http_client->post(
+                $this->GetSsoUrl().'/token', 
+                ['grant_type' => 'client_credentials'], 
+                ["Authorization: Basic $credential"]
+            );
+            if($resp){
+                $json = json_decode($resp);
+                if($json->status != 'success'){
+                    throw new \Exception("Auth Type Client-Credentials failed: $resp");
+                }
+
+                return true;
+            }
+
+            throw new \Exception('Empty response from Authentication API', 500);
+        }catch(\Exception $e){
+            throw $e;
+        }
+    }
+
     function GetUserInfo(){
-        $this->Auth();
+        $this->AuthCheck();
 
         try{
             $access_token = self::GetToken('access_token');
-            $resp = $this->http_client->post($this->GetSsoUrl().'/userinfo', ['client_id' => $this->client_id], ["Authorization: Bearer $access_token"]);
+            $resp = $this->http_client->post(
+                $this->GetSsoUrl().'/userinfo', 
+                ['client_id' => $this->client_id], 
+                ["Authorization: Bearer $access_token"]
+            );
             if($resp){
-                $json_resp = json_decode($resp);
-                if($json_resp->status != 'success'){
+                $json = json_decode($resp);
+                if($json->status != 'success'){
                     throw new \Exception("Get User Info failed: $resp");
                 }
                 
-                return $json_resp->user;
+                return $json->user;
             }
 
-            throw new \Exception('Empty response from User-info API');
+            throw new \Exception('Empty response from User-info API', 500);
         }catch(\Exception $e){
             throw $e;
         }
@@ -231,14 +272,18 @@ class BbtSsoClient {
         try{
             $access_token = self::GetToken('access_token');
             $this->RevokeTokens();
-            $resp = $this->http_client->post($this->GetSsoUrl().'/logout', [], ["Authorization: Bearer $access_token"]);
+            $resp = $this->http_client->post(
+                $this->GetSsoUrl().'/logout', 
+                [], 
+                ["Authorization: Bearer $access_token"]
+            );
             if($resp){
-                $json_resp = json_decode($resp);
-                if($json_resp->status != 'success'){
+                $json = json_decode($resp);
+                if($json->status != 'success'){
                     throw new \Exception("SLO failed: $resp");
                 }
             }else{
-                throw new \Exception('Empty response from Logout API');
+                throw new \Exception('Empty response from Logout API', 500);
             }
         }catch(\Exception $e){
             if($e->getCode() != 401){
