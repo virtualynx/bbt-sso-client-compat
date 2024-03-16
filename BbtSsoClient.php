@@ -20,8 +20,6 @@ class BbtSsoClient {
 
     private const ACCESS_TOKEN_NAME = 'mwsat';
     private const REFRESH_TOKEN_NAME = 'mwsrt';
-    private const ACCESS_TOKEN_AGE = (60*5);
-    private const REFRESH_TOKEN_AGE = (60*60*2);
     private const SILENT_LOGOUT_REASONS = [
         'Missing access and refresh token',
         'Missing access_token',
@@ -50,6 +48,7 @@ class BbtSsoClient {
         $challenge = base64_encode(hash('sha256', $verifier));
         
         $params['client_id'] = $this->client_id;
+        $params['response_type'] = 'code';
         $params['challenge'] = $challenge;
         $params['challenge_method'] = 's256';
         
@@ -58,7 +57,7 @@ class BbtSsoClient {
             $encoded_value = urlencode($value);
             $strs []= "$key=$encoded_value";
         }
-        $login_url = "$this->sso_url?".(implode('&', $strs));
+        $login_url = "$this->sso_url/login?".(implode('&', $strs));
 
         if($redirectLoginPage){
             header("Location: $login_url");
@@ -84,13 +83,17 @@ class BbtSsoClient {
             $pkce_verifier = $_COOKIE['pkce_verifier'];
             setcookie('pkce_verifier', '', time() - 1, '/', self::GetDomain(), false, true);
 
-            $resp = $this->http_client->post($this->GetSsoUrl().'/get_token', [
+            $resp = $this->http_client->post($this->GetSsoUrl().'/token', [
+                'grant_type' => 'authorization_code',
                 'code' => $_GET['code'],
                 'verifier' => $pkce_verifier
             ]);
             if($resp){
                 $json_resp = json_decode($resp);
-                self::SaveTokens($json_resp);
+                if($json_resp->status != 'success'){
+                    throw new \Exception($json_resp->status, 500);
+                }
+                self::SaveTokens($json_resp->token_data);
 
                 return $json_resp->user;
             }
@@ -106,7 +109,7 @@ class BbtSsoClient {
     }
 
     /**
-     * Call this to check the validity of the SSO's shared-session
+     * Call this to check the validity of the tokens and SSO's shared-session
      */
     function Auth($autoRedirectLogin = true){
         if($this->IsThrottled()){
@@ -115,7 +118,7 @@ class BbtSsoClient {
 
         try{
             $access_token = self::GetToken('access_token');
-            $resp = $this->http_client->post($this->GetSsoUrl().'/auth', ['type' => 'access'], $access_token);
+            $resp = $this->http_client->post($this->GetSsoUrl().'/token', ['grant_type' => 'verify'], ["Authorization: Bearer $access_token"]);
             if($resp){
                 $json_resp = json_decode($resp);
                 if($json_resp->status != 'success'){
@@ -161,11 +164,11 @@ class BbtSsoClient {
     private function RefreshToken($autoRedirectLogin){
         try{
             $refresh_token = self::GetToken('refresh_token');
-            $resp = $this->http_client->post($this->GetSsoUrl().'/auth', ['type' => 'refresh'], $refresh_token);
+            $resp = $this->http_client->post($this->GetSsoUrl().'/token', ['grant_type' => 'refresh'], ["Authorization: Bearer $refresh_token"]);
             if($resp){
                 $json_resp = json_decode($resp);
                 if($json_resp->status == 'success'){
-                    self::SaveTokens($json_resp);
+                    self::SaveTokens($json_resp->data);
                     $this->SetNextThrottlingTime();
 
                     return true;
@@ -201,8 +204,8 @@ class BbtSsoClient {
         $this->Auth();
 
         try{
-            $resp = $this->http_client->post(
-                $this->GetSsoUrl().'/userinfo', ['client_id' => $this->client_id], self::GetToken('access_token'));
+            $access_token = self::GetToken('access_token');
+            $resp = $this->http_client->post($this->GetSsoUrl().'/userinfo', ['client_id' => $this->client_id], ["Authorization: Bearer $access_token"]);
             if($resp){
                 $json_resp = json_decode($resp);
                 if($json_resp->status != 'success'){
@@ -228,7 +231,7 @@ class BbtSsoClient {
         try{
             $access_token = self::GetToken('access_token');
             $this->RevokeTokens();
-            $resp = $this->http_client->post($this->GetSsoUrl().'/logout', [], $access_token);
+            $resp = $this->http_client->post($this->GetSsoUrl().'/logout', [], ["Authorization: Bearer $access_token"]);
             if($resp){
                 $json_resp = json_decode($resp);
                 if($json_resp->status != 'success'){
@@ -271,10 +274,14 @@ class BbtSsoClient {
         return $_COOKIE[$tag];
     }
 
-    private static function SaveTokens($tokens){
+    private static function SaveTokens($data){
         $domain = self::GetDomain();
-        setcookie(self::ACCESS_TOKEN_NAME, $tokens->access_token, time() + self::ACCESS_TOKEN_AGE, '/', $domain, false, true);
-        setcookie(self::REFRESH_TOKEN_NAME, $tokens->refresh_token, time() + self::REFRESH_TOKEN_AGE, '/', $domain, false, true);
+
+        $access_token_age = (int)(1.5 * (float)$data->access_token_expires_in);
+        setcookie(self::ACCESS_TOKEN_NAME, $data->access_token, time() + $access_token_age, '/', $domain, false, true);
+
+        $refresh_token_age = (int)(1.5 * (float)$data->refresh_token_expires_in);
+        setcookie(self::REFRESH_TOKEN_NAME, $data->refresh_token, time() + $refresh_token_age, '/', $domain, false, true);
     }
 
     private static function GetDomain(){
