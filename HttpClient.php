@@ -9,7 +9,7 @@ class HttpClient {
         $this->proxy = $proxy;
     }
 
-    public function post($url, $params, $bearer = ''){
+    public function post($url, $params, $headers = []){
         $curl = curl_init($url);
         
         curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
@@ -21,8 +21,8 @@ class HttpClient {
             curl_setopt($curl, CURLOPT_POSTFIELDS, $params);
         }
 
-        if(!empty($bearer)){
-            curl_setopt($curl, CURLOPT_HTTPHEADER, ["Authorization: Bearer $bearer"]);
+        if(!empty($headers)){
+            curl_setopt($curl, CURLOPT_HTTPHEADER, $headers);
         }
 
         if(!empty($this->proxy)){
