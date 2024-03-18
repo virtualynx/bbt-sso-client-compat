@@ -39,3 +39,4 @@ $sso->LoginPage(['some_url_param' => 'somevalue']); //redirect to login page wit
 
 $url = $sso->LoginPage([], false); //set 2nd argument to false for only generate login url without automatically-redirecting to the login page
 ```
+- if you want to use another "grant_type" other than "authorization_code", contact administrator (currently supported grant_type(s): authorization_code, password, and client_credentials)
