@@ -27,7 +27,7 @@ $sso = new BbtSsoClient($sso_url, $sso_client_id, $sso_client_secret);
 $sso->AuthCheck(); //authenticate and automatically redirect to the SSO's login page if yet to be logged-in
 ```
 
-- Login page redirections
+- Login page redirections (Explicitly)
 ```
 $sso = new BbtSsoClient($sso_url, $sso_client_id, $sso_client_secret);
 
