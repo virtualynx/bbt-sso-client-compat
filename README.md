@@ -31,12 +31,13 @@ $sso->AuthCheck(); //authenticate and automatically redirect to the SSO's login 
 ```
 $sso = new BbtSsoClient($sso_url, $sso_client_id, $sso_client_secret);
 
-$sso->Logout(); //also revokes tokens saved in cookies
+$sso->Logout(); //revokes tokens saved in cookies, logout shared-session in IDP's server, and redirects to the login page
 
-$sso->LoginPage(); //redirect to login page without revoking tokens
+$sso->LoginPage(); //or, redirect to login page without revoking tokens
 
-$sso->LoginPage(['some_url_param' => 'somevalue']); //redirect to login page without revoking tokens, and with url parameters
+$sso->LoginPage(['some_url_param' => 'somevalue']); //or, redirect to login page without revoking tokens, and with url parameters
 
-$url = $sso->LoginPage([], false); //set 2nd argument to false for only generate login url without automatically-redirecting to the login page
+$url = $sso->LoginPage([], false); //or, set 2nd argument to false for only generate login url without automatically-redirecting to the login page
 ```
-- if you want to use another "grant_type" other than "authorization_code", contact administrator (currently supported grant_type(s): "authorization_code", "password", and "client_credentials")
+
+if you want to use another "grant_type" other than "authorization_code", contact administrator (currently supported grant_type(s): "authorization_code", "password", and "client_credentials")
