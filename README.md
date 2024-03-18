@@ -8,7 +8,7 @@
 $sso = new BbtSsoClient($sso_url, $sso_client_id, $sso_client_secret);
 ```
 
-- Register your SSO login callback's url and call method SsoCallbackHandler() to perform 2nd step of Oauth2 flow (get token using Authorization Code):
+- Register your SSO login callback's url and call method SsoCallbackHandler() to perform 2nd step of Oauth2 flow (get token using Authorization Code)
 ```
 public function do_login_sso(){
   $sso = new BbtSsoClient($sso_url, $sso_client_id, $sso_client_secret);
@@ -25,4 +25,17 @@ public function do_login_sso(){
 ```
 $sso = new BbtSsoClient($sso_url, $sso_client_id, $sso_client_secret);
 $sso->AuthCheck(); //authenticate and automatically redirect to the SSO's login page if yet to be logged-in
+```
+
+- Login page redirections
+```
+$sso = new BbtSsoClient($sso_url, $sso_client_id, $sso_client_secret);
+
+$sso->Logout(); //also revokes tokens saved in cookies
+
+$sso->LoginPage(); //redirect to login page without revoking tokens
+
+$sso->LoginPage(['some_url_param' => 'somevalue']); //redirect to login page without revoking tokens, and with url parameters
+
+$url = $sso->LoginPage([], false); //set 2nd argument to false for only generate login url without automatically-redirecting to the login page
 ```
