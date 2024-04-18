@@ -41,12 +41,15 @@ class BbtSsoClient {
         $this->http_client = new HttpClient($proxy);
     }
 
-    function LoginPage($params = [], $redirectLoginPage = true){
+    function LoginPage($params = null, $redirectLoginPage = true){
         $verifier = self::GenerateRandomString(64);
         setcookie('pkce_verifier', $verifier, time() + (60*60*24 * 3), '/', $this->GetDomain(), false, true);
 
         $challenge = base64_encode(hash('sha256', $verifier));
         
+        if(empty($params)){
+            $params = [];
+        }
         $params['client_id'] = $this->client_id;
         $params['response_type'] = 'code';
         $params['challenge'] = $challenge;
@@ -75,8 +78,14 @@ class BbtSsoClient {
             throw new \Exception('Invalid call, missing "code"');
         }
 
+        $loginpageParams = [];
+        if(!empty($_GET['redirect'])){
+            $loginpageParams['redirect'] = $_GET['redirect'];
+        }
+
         if(!isset($_COOKIE['pkce_verifier'])){
-            $this->LoginPage(['alert' => 'You left your login-page open for a long period of time. Please try logging in again !']);
+            $loginpageParams['alert'] = 'You left your login-page open for a long period of time. Please try logging in again !';
+            $this->LoginPage($loginpageParams);
         }
 
         try{
@@ -104,7 +113,8 @@ class BbtSsoClient {
             throw new \Exception('Empty response from Code-Exchange API', 500);
         }catch(\Exception $e){
             if($e->getCode() == 401 && $e->getMessage() == 'PKCE challenge failed'){
-                $this->LoginPage(['alert' => 'Login failed, make sure not to open multiple SSO-Login Page at once']);
+                $loginpageParams['alert'] = 'Login failed, make sure not to open multiple SSO-Login Page at once !';
+                $this->LoginPage($loginpageParams);
             }
 
             throw $e;
