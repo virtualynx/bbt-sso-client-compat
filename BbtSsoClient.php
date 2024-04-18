@@ -75,8 +75,14 @@ class BbtSsoClient {
             throw new \Exception('Invalid call, missing "code"');
         }
 
+        $loginpageParams = [];
+        if(!empty($_GET['redirect'])){
+            $loginpageParams['redirect'] = $_GET['redirect'];
+        }
+
         if(!isset($_COOKIE['pkce_verifier'])){
-            $this->LoginPage(['alert' => 'You left your login-page open for a long period of time. Please try logging in again !']);
+            $loginpageParams['alert'] = 'You left your login-page open for a long period of time. Please try logging in again !';
+            $this->LoginPage($loginpageParams);
         }
 
         try{
@@ -104,7 +110,8 @@ class BbtSsoClient {
             throw new \Exception('Empty response from Code-Exchange API', 500);
         }catch(\Exception $e){
             if($e->getCode() == 401 && $e->getMessage() == 'PKCE challenge failed'){
-                $this->LoginPage(['alert' => 'Login failed, make sure not to open multiple SSO-Login Page at once']);
+                $loginpageParams['alert'] = 'Login failed, make sure not to open multiple SSO-Login Page at once !';
+                $this->LoginPage($loginpageParams);
             }
 
             throw $e;
