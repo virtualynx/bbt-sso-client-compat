@@ -41,12 +41,15 @@ class BbtSsoClient {
         $this->http_client = new HttpClient($proxy);
     }
 
-    function LoginPage($params = [], $redirectLoginPage = true){
+    function LoginPage($params = null, $redirectLoginPage = true){
         $verifier = self::GenerateRandomString(64);
         setcookie('pkce_verifier', $verifier, time() + (60*60*24 * 3), '/', $this->GetDomain(), false, true);
 
         $challenge = base64_encode(hash('sha256', $verifier));
         
+        if(empty($params)){
+            $params = [];
+        }
         $params['client_id'] = $this->client_id;
         $params['response_type'] = 'code';
         $params['challenge'] = $challenge;
