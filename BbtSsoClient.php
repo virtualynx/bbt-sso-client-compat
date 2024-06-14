@@ -280,20 +280,26 @@ class BbtSsoClient {
 
     public function Logout($redirectLoginPage = true){
         try{
-            $access_token = self::GetToken('access_token');
+            $token = self::GetToken('access_token');
+            if(empty($token)){
+                $token = self::GetToken('refresh_token');
+            }
             $this->RevokeTokens();
-            $resp = $this->http_client->post(
-                $this->GetSsoUrl().'/logout', 
-                [], 
-                ["Authorization: Bearer $access_token"]
-            );
-            if($resp){
-                $json = json_decode($resp);
-                if($json->status != 'success'){
-                    throw new \Exception("SLO failed: $resp");
+
+            if(!empty($token)){
+                $resp = $this->http_client->post(
+                    $this->GetSsoUrl().'/logout', 
+                    [], 
+                    ["Authorization: Bearer $token"]
+                );
+                if($resp){
+                    $json = json_decode($resp);
+                    if($json->status != 'success'){
+                        throw new \Exception("SLO failed: $resp");
+                    }
+                }else{
+                    throw new \Exception('Empty response from Logout API', 500);
                 }
-            }else{
-                throw new \Exception('Empty response from Logout API', 500);
             }
         }catch(\Exception $e){
             if($e->getCode() != 401){
