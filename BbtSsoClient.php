@@ -252,14 +252,14 @@ class BbtSsoClient {
 
         try{
             $access_token = self::GetToken('access_token');
-            $resp = $this->http_client->post(
+            $resp = $this->http_client->post( 
                 $this->GetSsoUrl().'/userinfo', 
                 ['client_id' => $this->client_id], 
                 ["Authorization: Bearer $access_token"]
             );
             if($resp){
                 $json = json_decode($resp);
-                if($json->status != 'success'){
+                if(empty($json) || $json->status != 'success'){
                     throw new \Exception("Get User Info failed: $resp");
                 }
                 
@@ -268,6 +268,10 @@ class BbtSsoClient {
 
             throw new \Exception('Empty response from User-info API', 500);
         }catch(\Exception $e){
+            if($e->getCode() == 401){
+                header("Refresh:0"); //refresh pages to get the refreshed token value (which fetched upon AuthCheck() above)
+            }
+
             throw $e;
         }
     }
