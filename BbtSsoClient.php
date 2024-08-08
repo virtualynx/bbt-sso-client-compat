@@ -343,40 +343,19 @@ class BbtSsoClient {
     private static function SaveTokens($data){
         $domain = self::GetDomain();
 
-        $access_token_age = (int)(1.5 * (float)$data->access_token_expires_in);
-        $refresh_token_age = (int)(1.5 * (float)$data->refresh_token_expires_in);
+        $expires = time() + 60 * 60 * 12;
+        $dateTime = new \DateTime();
+        $dateTime->setTimestamp($expires);
+        $dateTime->setTimezone(new \DateTimeZone(date_default_timezone_get()));
+        $expiresText = $dateTime->format('D, d M Y H:i:s e');
 
-        date_default_timezone_set('Asia/Jakarta');
+        $header_suffixes = "expires=$expiresText; path=/; domain=$domain; SameSite=Strict; httponly;";
 
-        $add_hour = 60 * 60 * 7;
+        $access_token_name = self::ACCESS_TOKEN_NAME;
+        $refresh_token_name = self::REFRESH_TOKEN_NAME;
 
-        // setcookie(self::ACCESS_TOKEN_NAME, $data->access_token, time() + $access_token_age, '/', $domain, false, true);
-        setcookie(
-            self::ACCESS_TOKEN_NAME, 
-            $data->access_token, 
-            [
-                'expires' => time() + $add_hour + $access_token_age,
-                'path' => '/',
-                'domain' => $domain,
-                'secure' => false,
-                'httponly' => false,
-                'samesite' => 'Strict',
-            ]
-        );
-
-        // setcookie(self::REFRESH_TOKEN_NAME, $data->refresh_token, time() + $refresh_token_age, '/', $domain, false, true);
-        setcookie(
-            self::REFRESH_TOKEN_NAME, 
-            $data->refresh_token, 
-            [
-                'expires' => time() + $add_hour + $refresh_token_age,
-                'path' => '/',
-                'domain' => $domain,
-                'secure' => false,
-                'httponly' => false,
-                'samesite' => 'Strict',
-            ]
-        );
+        header("Set-Cookie: $access_token_name=$data->access_token; $header_suffixes");
+        header("Set-Cookie: $refresh_token_name=$data->refresh_token; $header_suffixes", false);
     }
 
     private static function GetDomain(){
