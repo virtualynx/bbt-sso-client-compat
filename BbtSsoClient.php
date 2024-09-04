@@ -349,7 +349,7 @@ class BbtSsoClient {
         $dateTime->setTimezone(new \DateTimeZone(date_default_timezone_get()));
         $expiresText = $dateTime->format('D, d M Y H:i:s e');
 
-        $header_suffixes = "expires=$expiresText; path=/; domain=$domain; SameSite=Strict; httponly;";
+        $header_suffixes = "expires=$expiresText; path=/; domain=$domain; SameSite=Lax; httponly;";
 
         $access_token_name = self::ACCESS_TOKEN_NAME;
         $refresh_token_name = self::REFRESH_TOKEN_NAME;
