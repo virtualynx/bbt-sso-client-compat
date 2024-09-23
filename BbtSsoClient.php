@@ -14,7 +14,7 @@ class BbtSsoClient {
     private $sso_url;
     private $client_id;
     private $client_secret;
-    private $sso_url_local;
+    private $failover_url;
     private $proxy;
     private $http_client;
 
@@ -29,21 +29,27 @@ class BbtSsoClient {
     private const MSG_SESSION_EXPIRED = 'Your session is expired, please login again !';
 
     function __construct(
-        $sso_url, $client_id, $client_secret,
-        $sso_url_local = '',
+        $sso_url, 
+        $client_id, $client_secret,
+        $failover_url = null,
         $proxy = null
     ){
         $this->sso_url = $sso_url;
         $this->client_id = $client_id;
         $this->client_secret = $client_secret;
-        $this->sso_url_local = $sso_url_local;
+        $this->failover_url = $failover_url;
         $this->proxy = $proxy;
         $this->http_client = new HttpClient($proxy);
     }
 
     function LoginPage($params = null, $redirectLoginPage = true){
-        $verifier = self::GenerateRandomString(64);
-        setcookie('pkce_verifier', $verifier, time() + (60*60*24 * 3), '/', $this->GetDomain(), false, true);
+        $verifier = null;
+        if(!empty($_COOKIE['pkce_verifier'])){
+            $verifier = $_COOKIE['pkce_verifier'];
+        }else{
+            $verifier = self::GenerateRandomString(64);
+            self::_SetCookie('pkce_verifier', $verifier, time() + (60*60*24 * 3), '/', $this->GetDomain(), false, false);
+        }
 
         $challenge = base64_encode(hash('sha256', $verifier));
         
@@ -54,13 +60,8 @@ class BbtSsoClient {
         $params['response_type'] = 'code';
         $params['challenge'] = $challenge;
         $params['challenge_method'] = 's256';
-        
-        $strs = [];
-        foreach($params as $key => $value){
-            $encoded_value = urlencode($value);
-            $strs []= "$key=$encoded_value";
-        }
-        $login_url = "$this->sso_url/login?".(implode('&', $strs));
+
+        $login_url = "$this->sso_url/login?".self::AssocToUrlParams($params);
 
         if($redirectLoginPage){
             header("Location: $login_url");
@@ -74,50 +75,35 @@ class BbtSsoClient {
      * Call this on your callback endpoint
      */
     function SsoCallbackHandler(){
-        if(!isset($_GET['code'])){
-            throw new \Exception('Invalid call, missing "code"');
-        }
+        if(!empty($_GET['code'])){
+            $params = [];
+            if(!empty($_GET['redirect'])){
+                $params['redirect'] = $_GET['redirect'];
+            }
 
-        $loginpageParams = [];
-        if(!empty($_GET['redirect'])){
-            $loginpageParams['redirect'] = $_GET['redirect'];
-        }
+            if(!isset($_COOKIE['pkce_verifier'])){
+                $params['alert'] = 'You left your login-page open for a long period of time. Please try logging in again !';
+                $this->LoginPage($params);
+            }
 
-        if(!isset($_COOKIE['pkce_verifier'])){
-            $loginpageParams['alert'] = 'You left your login-page open for a long period of time. Please try logging in again !';
-            $this->LoginPage($loginpageParams);
-        }
-
-        try{
             $pkce_verifier = $_COOKIE['pkce_verifier'];
-            setcookie('pkce_verifier', '', time() - 1, '/', self::GetDomain(), false, true);
+            self::_SetCookie('pkce_verifier', '', -1);
 
-            $resp = $this->http_client->post(
-                $this->GetSsoUrl().'/token', 
-                [
-                    'grant_type' => 'authorization_code',
-                    'code' => $_GET['code'],
-                    'verifier' => $pkce_verifier
-                ]
-            );
-            if($resp){
-                $json = json_decode($resp);
-                if($json->status != 'success'){
-                    throw new \Exception($json->status, 500);
-                }
-                self::SaveTokens($json->token_data);
-
-                return $json->user;
+            $params['grant_type'] = 'authorization_code';
+            $params['code'] = $_GET['code'];
+            $params['verifier'] = $pkce_verifier;
+    
+            header("Location: $this->sso_url/token2?".self::AssocToUrlParams($params));
+            exit;
+        }else if(!empty($_GET['login_status'])){
+            $user = null;
+            if($_GET['login_status'] == 'success'){
+                $user = json_decode(urldecode($_GET['user']));
             }
 
-            throw new \Exception('Empty response from Code-Exchange API', 500);
-        }catch(\Exception $e){
-            if($e->getCode() == 401 && $e->getMessage() == 'PKCE challenge failed'){
-                $loginpageParams['alert'] = 'Login failed, make sure not to open multiple SSO-Login Page at once !';
-                $this->LoginPage($loginpageParams);
-            }
-
-            throw $e;
+            return $user;
+        }else{
+            throw new \Exception('Invalid call, neither parameter "code", or "login_status" is to be found !');
         }
     }
 
@@ -129,10 +115,13 @@ class BbtSsoClient {
             return true;
         }
 
+        //for redirection methods
+        // $current_url = (empty($_SERVER['HTTPS']) ? 'http' : 'https')."://".$_SERVER['HTTP_HOST'].$_SERVER['REQUEST_URI'];
+
         try{
             $access_token = self::GetToken('access_token');
-            $resp = $this->http_client->post(
-                $this->GetSsoUrl().'/token', 
+            $resp = $this->http_client->get(
+                $this->GetSsoEndpoint().'/token2', 
                 ['grant_type' => 'verify'], 
                 ["Authorization: Bearer $access_token"]
             );
@@ -151,38 +140,16 @@ class BbtSsoClient {
             if($e->getCode() == 401){
                 if($e->getMessage() == 'Expired token'){ //access token is expired
                     return $this->RefreshToken($autoRedirectLogin);
-                }else{
-                    $this->RevokeTokens();
-                    $alert = '';
-                    $result = null;
-                    if(in_array($e->getMessage(), self::SILENT_LOGOUT_REASONS)){
-                        $alert = self::MSG_SESSION_EXPIRED;
-                        $result = false;
-                    }else{
-                        $alert = $e->getMessage();
-                        $result = $e->getMessage();
-                    }
-                    if($autoRedirectLogin){
-                        $loginParams = ['alert' => $alert];
-                        if(!empty($_SERVER['HTTP_REFERER'])){
-                            $loginParams['redirect'] = $_SERVER['HTTP_REFERER'];
-                        }
-                        $this->LoginPage($loginParams);
-                    }
-
-                    return $result;
-                }
+                }else{}
             }
-
-            throw $e;
         }
     }
     
     private function RefreshToken($autoRedirectLogin){
         try{
             $refresh_token = self::GetToken('refresh_token');
-            $resp = $this->http_client->post(
-                $this->GetSsoUrl().'/token', 
+            $resp = $this->http_client->get(
+                $this->GetSsoEndpoint().'/token2', 
                 ['grant_type' => 'refresh'], 
                 ["Authorization: Bearer $refresh_token"]
             );
@@ -224,28 +191,28 @@ class BbtSsoClient {
     /**
      * Option for authenticating your api-app
      */
-    function AuthGrantClientCredentials(){
-        try{
-            $credential = base64_encode($this->client_id.':'.$this->client_secret);
-            $resp = $this->http_client->post(
-                $this->GetSsoUrl().'/token', 
-                ['grant_type' => 'client_credentials'], 
-                ["Authorization: Basic $credential"]
-            );
-            if($resp){
-                $json = json_decode($resp);
-                if($json->status != 'success'){
-                    throw new \Exception("Auth Type Client-Credentials failed: $resp");
-                }
+    // function AuthGrantClientCredentials(){
+    //     try{
+    //         $credential = base64_encode($this->client_id.':'.$this->client_secret);
+    //         $resp = $this->http_client->post(
+    //             $this->GetSsoEndpoint().'/token', 
+    //             ['grant_type' => 'client_credentials'], 
+    //             ["Authorization: Basic $credential"]
+    //         );
+    //         if($resp){
+    //             $json = json_decode($resp);
+    //             if($json->status != 'success'){
+    //                 throw new \Exception("Auth Type Client-Credentials failed: $resp");
+    //             }
 
-                return true;
-            }
+    //             return true;
+    //         }
 
-            throw new \Exception('Empty response from Authentication API', 500);
-        }catch(\Exception $e){
-            throw $e;
-        }
-    }
+    //         throw new \Exception('Empty response from Authentication API', 500);
+    //     }catch(\Exception $e){
+    //         throw $e;
+    //     }
+    // }
 
     function GetUserInfo(){
         $this->AuthCheck();
@@ -253,7 +220,7 @@ class BbtSsoClient {
         try{
             $access_token = self::GetToken('access_token');
             $resp = $this->http_client->post( 
-                $this->GetSsoUrl().'/userinfo', 
+                $this->GetSsoEndpoint().'/userinfo', 
                 ['client_id' => $this->client_id], 
                 ["Authorization: Bearer $access_token"]
             );
@@ -278,8 +245,8 @@ class BbtSsoClient {
 
     public function RevokeTokens(){
         $domain = self::GetDomain();
-        setcookie(self::ACCESS_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
-        setcookie(self::REFRESH_TOKEN_NAME, '', time()-1, '/', $domain, false, true);
+        setcookie(self::ACCESS_TOKEN_NAME, '', time()-1, '/', $domain, false, false);
+        setcookie(self::REFRESH_TOKEN_NAME, '', time()-1, '/', $domain, false, false);
     }
 
     public function Logout($redirectLoginPage = true){
@@ -298,7 +265,7 @@ class BbtSsoClient {
 
         if(!empty($token)){
             $resp = $this->http_client->post(
-                $this->GetSsoUrl().'/logout', 
+                $this->GetSsoEndpoint().'/logout', 
                 [], 
                 ["Authorization: Bearer $token"]
             );
@@ -315,8 +282,8 @@ class BbtSsoClient {
         return $this->LoginPage(['alert' => 'You have been logged-out'], $redirectLoginPage);
     }
 
-    private function GetSsoUrl(){
-        return !empty($this->sso_url_local)? $this->sso_url_local: $this->sso_url;
+    private function GetSsoEndpoint(){
+        return !empty($this->failover_url)? $this->failover_url: $this->sso_url;
     }
 
     private static function GetToken($name){
@@ -341,21 +308,82 @@ class BbtSsoClient {
     }
 
     private static function SaveTokens($data){
-        $domain = self::GetDomain();
+        // $cookie_opts = [
+        //     'expires' => time() + 60 * 60 * 12,
+        //     'samesite' => 'lax',
+        //     'secure' => false,
+        //     'httponly' => true
+        // ];
+        $cookie_opts = [
+            'expires' => time() + 60 * 60 * 12,
+            'samesite' => 'strict',
+            'secure' => false,
+            'httponly' => false
+        ];
+        self::_SetCookie(self::ACCESS_TOKEN_NAME, $data->access_token, $cookie_opts);
+        self::_SetCookie(self::REFRESH_TOKEN_NAME, $data->refresh_token, $cookie_opts);
+    }
 
-        $expires = time() + 60 * 60 * 12;
+    private static function _SetCookie($name, $value, $expires_or_options , $path = '/', $domain = '', $secure = false, $httponly = false){
+        $cookie_arr = [
+            $name => $value
+        ];
+
+        $expires_time = -1;
+        if(is_array($expires_or_options)){
+            foreach($expires_or_options as $row_name => $row_value){
+                if($row_name == 'expires'){
+                    $expires_time = $row_value;
+                }else{
+                    $cookie_arr[$row_name]= $row_value;
+                }
+            }
+        }else{
+            $expires_time = $expires_or_options;
+            $cookie_arr['path']= $path;
+            $cookie_arr['domain']= $domain;
+            $cookie_arr['secure']= $secure;
+            $cookie_arr['httponly']= $httponly;
+        }
+
+        if(!array_key_exists('path', $cookie_arr)){
+            $cookie_arr['path']= '/';
+        }
+        if(!array_key_exists('domain', $cookie_arr)){
+            $cookie_arr['domain']= self::GetDomain();
+        }
+        if(!array_key_exists('samesite', $cookie_arr)){
+            $cookie_arr['samesite']= 'lax';
+        }
+        if($expires_time > 0){
+            $expires = time() + 60 * 60 * 12;
+        }else{
+            $expires = time() * -1;
+        }
+
         $dateTime = new \DateTime();
         $dateTime->setTimestamp($expires);
         $dateTime->setTimezone(new \DateTimeZone(date_default_timezone_get()));
         $expiresText = $dateTime->format('D, d M Y H:i:s e');
+        $cookie_arr['expires']= $expiresText;
 
-        $header_suffixes = "expires=$expiresText; path=/; domain=$domain; SameSite=Lax; httponly;";
-
-        $access_token_name = self::ACCESS_TOKEN_NAME;
-        $refresh_token_name = self::REFRESH_TOKEN_NAME;
-
-        header("Set-Cookie: $access_token_name=$data->access_token; $header_suffixes");
-        header("Set-Cookie: $refresh_token_name=$data->refresh_token; $header_suffixes", false);
+        $cookie_sets = [];
+        foreach($cookie_arr as $row_key => $row_value){
+            if($row_key == 'secure'){
+                if($row_value == true){
+                    $cookie_sets []= 'secure';
+                }
+            }else if($row_key == 'httponly'){
+                if($row_value == true){
+                    $cookie_sets []= 'httponly';
+                }
+            }else{
+                $cookie_sets []= "$row_key=$row_value";
+            }
+        }
+        $cookie_str = implode('; ', $cookie_sets);
+        
+        header("Set-Cookie: $cookie_str", false);
     }
 
     private static function GetDomain(){
@@ -372,7 +400,7 @@ class BbtSsoClient {
 
         $pieces = parse_url($url);
         $domain = isset($pieces['host'])? $pieces['host']: (isset($pieces['path'])? $pieces['path']: '');
-        
+
         if(preg_match('/(?P<domain>[a-z0-9][a-z0-9\-]{1,63}\.[a-z\.]{2,6})$/i', $domain, $regs)){
             return '.'.$regs['domain'];
         }
@@ -383,6 +411,16 @@ class BbtSsoClient {
 	private static function GenerateRandomString($length){
 		return bin2hex(random_bytes(($length-($length%2))/2));
 	}
+
+    private static function AssocToUrlParams($params){
+        $strs = [];
+        foreach($params as $key => $value){
+            $encoded_value = urlencode($value);
+            $strs []= "$key=$encoded_value";
+        }
+
+        return implode('&', $strs);
+    }
 
     private function IsThrottled() {
         if(!empty($this->proxy) && $this->proxy->auth_throttle > 0){
